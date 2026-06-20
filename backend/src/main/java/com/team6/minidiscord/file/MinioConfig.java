@@ -3,6 +3,7 @@ package com.team6.minidiscord.file;
 import io.minio.BucketExistsArgs;
 import io.minio.MakeBucketArgs;
 import io.minio.MinioClient;
+import io.minio.SetBucketPolicyArgs;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -33,9 +34,29 @@ public class MinioConfig {
                 if (!exists) {
                     client.makeBucket(MakeBucketArgs.builder().bucket(bucket).build());
                 }
+                client.setBucketPolicy(SetBucketPolicyArgs.builder()
+                        .bucket(bucket)
+                        .config(publicReadPolicy(bucket))
+                        .build());
             } catch (Exception ex) {
                 throw new IllegalStateException("Cannot initialize MinIO bucket " + bucket, ex);
             }
+        }
+
+        private String publicReadPolicy(String bucket) {
+            return """
+                    {
+                      "Version": "2012-10-17",
+                      "Statement": [
+                        {
+                          "Effect": "Allow",
+                          "Principal": { "AWS": ["*"] },
+                          "Action": ["s3:GetObject"],
+                          "Resource": ["arn:aws:s3:::%s/*"]
+                        }
+                      ]
+                    }
+                    """.formatted(bucket);
         }
     }
 }

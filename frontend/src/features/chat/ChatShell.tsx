@@ -22,7 +22,9 @@ import { queryClient } from '../../app/queryClient';
 import { useAuthStore } from '../../store/authStore';
 import type {
   ApiResponse,
+  Attachment,
   Channel,
+  CurrentUser,
   InviteCode,
   Member,
   Message,
@@ -32,7 +34,7 @@ import type {
   WebSocketEvent
 } from '../../shared/types';
 
-type ModalMode = 'create-server' | 'join-server' | 'create-channel' | 'invite-user' | 'invite-code' | 'edit-channel' | null;
+type ModalMode = 'profile' | 'create-server' | 'join-server' | 'create-channel' | 'invite-user' | 'invite-code' | 'edit-channel' | null;
 type SendMessageVariables = { channelId: string; content: string; clientRequestId: string };
 
 function initialOf(value?: string) {
@@ -64,6 +66,7 @@ function removeMessage(messages: Message[] | undefined, messageId: string) {
 export function ChatShell() {
   const auth = useAuthStore();
   const messageListRef = useRef<HTMLDivElement>(null);
+  const avatarInputRef = useRef<HTMLInputElement>(null);
   const [serverId, setServerId] = useState<string>();
   const [channelId, setChannelId] = useState<string>();
   const [message, setMessage] = useState('');
@@ -73,6 +76,12 @@ export function ChatShell() {
   const [joinCode, setJoinCode] = useState('');
   const [inviteeUsername, setInviteeUsername] = useState('');
   const [inviteMaxUses, setInviteMaxUses] = useState('');
+  const [profileUsername, setProfileUsername] = useState('');
+  const [profileDisplayName, setProfileDisplayName] = useState('');
+  const [profileCustomStatus, setProfileCustomStatus] = useState('');
+  const [profileAvatarUrl, setProfileAvatarUrl] = useState('');
+  const [profileError, setProfileError] = useState('');
+  const [avatarUploadError, setAvatarUploadError] = useState('');
   const [modal, setModal] = useState<ModalMode>(null);
   const [selectedChannel, setSelectedChannel] = useState<Channel>();
   const [serverMenuOpen, setServerMenuOpen] = useState(false);
@@ -120,6 +129,12 @@ export function ChatShell() {
   const receivedInvites = useQuery({
     queryKey: ['received-invites'],
     queryFn: () => unwrap(api.get<ApiResponse<ServerInvite[]>>('/server-invites/received'))
+  });
+
+  const currentProfile = useQuery({
+    queryKey: ['profile'],
+    queryFn: () => unwrap(api.get<ApiResponse<CurrentUser>>('/users/me')),
+    enabled: modal === 'profile'
   });
 
   const inviteCodes = useQuery({
@@ -307,6 +322,80 @@ export function ChatShell() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['notifications'] })
   });
 
+  const updateProfile = useMutation({
+    mutationFn: () =>
+      unwrap(
+        api.patch<ApiResponse<CurrentUser>>('/users/me', {
+          username: profileUsername.trim(),
+          displayName: profileDisplayName.trim(),
+          customStatus: profileCustomStatus.trim(),
+          avatarUrl: profileAvatarUrl.trim()
+        })
+      ),
+    onMutate: () => setProfileError(''),
+    onSuccess: (user) => {
+      if (auth.accessToken) {
+        auth.setAuth(auth.accessToken, user);
+      }
+      queryClient.setQueryData<CurrentUser>(['profile'], user);
+      queryClient.invalidateQueries({ queryKey: ['members'] });
+      setModal(null);
+    },
+    onError: (error: any) => {
+      setProfileError(error.response?.data?.error?.message ?? error.message ?? 'Could not update profile');
+    }
+  });
+
+  const uploadAvatar = useMutation({
+    mutationFn: (file: File) => {
+      const form = new FormData();
+      form.append('file', file);
+      form.append('purpose', 'avatar');
+      return unwrap(api.post<ApiResponse<Attachment>>('/files', form));
+    },
+    onMutate: () => {
+      setAvatarUploadError('');
+      setProfileError('');
+    },
+    onSuccess: (file) => {
+      setProfileAvatarUrl(file.fileUrl);
+    },
+    onError: (error: any) => {
+      setAvatarUploadError(error.response?.data?.error?.message ?? error.message ?? 'Could not upload avatar');
+    }
+  });
+
+  useEffect(() => {
+    if (modal === 'profile' && currentProfile.data) {
+      fillProfileForm(currentProfile.data);
+    }
+  }, [currentProfile.data, modal]);
+
+  function fillProfileForm(user?: CurrentUser) {
+    setProfileUsername(user?.username ?? '');
+    setProfileDisplayName(user?.displayName ?? '');
+    setProfileCustomStatus(user?.customStatus ?? '');
+    setProfileAvatarUrl(user?.avatarUrl ?? '');
+    setProfileError('');
+    setAvatarUploadError('');
+    if (avatarInputRef.current) {
+      avatarInputRef.current.value = '';
+    }
+  }
+
+  function uploadAvatarFile(file?: File) {
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      setAvatarUploadError('Please choose an image file.');
+      return;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      setAvatarUploadError('Avatar image must be 10 MB or smaller.');
+      return;
+    }
+    uploadAvatar.mutate(file);
+  }
+
   function openModal(mode: Exclude<ModalMode, null>, channel?: Channel) {
     setModal(mode);
     setServerMenuOpen(false);
@@ -319,6 +408,7 @@ export function ChatShell() {
     if (mode === 'invite-user') setInviteeUsername('');
     if (mode === 'invite-code') setInviteMaxUses('');
     if (mode === 'edit-channel') setChannelName(channel?.name ?? '');
+    if (mode === 'profile') fillProfileForm(currentProfile.data ?? auth.user);
   }
 
   function closeModal() {
@@ -353,7 +443,7 @@ export function ChatShell() {
   return (
     <main className="discord-shell">
       <aside className="server-rail">
-        <button className="server-pill home" title={auth.user?.username} type="button">
+        <button className="server-pill home" title="Profile" type="button" onClick={() => openModal('profile')}>
           {auth.user?.avatarUrl ? <img src={auth.user.avatarUrl} alt="" /> : initialOf(auth.user?.username)}
         </button>
         <span className="server-divider" />
@@ -445,13 +535,13 @@ export function ChatShell() {
         </nav>
 
         <footer className="account-panel">
-          <div className="account-user">
+          <button className="account-user" type="button" onClick={() => openModal('profile')}>
             <div className="small-avatar">{auth.user?.avatarUrl ? <img src={auth.user.avatarUrl} alt="" /> : initialOf(auth.user?.username)}</div>
             <div>
               <strong>{auth.user?.displayName ?? auth.user?.username}</strong>
-              <span>{auth.user?.username ? `@${auth.user.username}` : 'online'}</span>
+              <span>{auth.user?.customStatus || (auth.user?.username ? `@${auth.user.username}` : 'online')}</span>
             </div>
-          </div>
+          </button>
           <button title="Logout" type="button" onClick={logout}>
             <LogOut size={18} />
           </button>
@@ -591,6 +681,68 @@ export function ChatShell() {
                 <h2>Create server</h2>
                 <input value={serverName} onChange={(event) => setServerName(event.target.value)} placeholder="Server name" autoFocus />
                 <button className="modal-primary" disabled={!serverName.trim() || createServer.isPending}>Create</button>
+              </form>
+            )}
+
+            {modal === 'profile' && (
+              <form onSubmit={(event) => { event.preventDefault(); if (profileUsername.trim()) updateProfile.mutate(); }}>
+                <h2>Profile</h2>
+                <div className="profile-card">
+                  <div className="profile-avatar">
+                    {profileAvatarUrl.trim() ? <img src={profileAvatarUrl.trim()} alt="" /> : initialOf(profileUsername || auth.user?.username)}
+                  </div>
+                  <div>
+                    <strong>{profileDisplayName.trim() || profileUsername || auth.user?.username}</strong>
+                    <span>{profileCustomStatus.trim() || auth.user?.email}</span>
+                  </div>
+                </div>
+                <label>
+                  Username
+                  <input
+                    value={profileUsername}
+                    onChange={(event) => setProfileUsername(event.target.value)}
+                    minLength={3}
+                    maxLength={32}
+                    pattern="^[a-zA-Z0-9_.-]+$"
+                    required
+                    autoFocus
+                  />
+                </label>
+                <label>
+                  Display name
+                  <input value={profileDisplayName} onChange={(event) => setProfileDisplayName(event.target.value)} maxLength={80} placeholder="Display name" />
+                </label>
+                <label>
+                  Custom status
+                  <input value={profileCustomStatus} onChange={(event) => setProfileCustomStatus(event.target.value)} maxLength={180} placeholder="Status" />
+                </label>
+                <label>
+                  Avatar URL
+                  <input value={profileAvatarUrl} onChange={(event) => setProfileAvatarUrl(event.target.value)} placeholder="https://..." />
+                </label>
+                <div className="avatar-upload-row">
+                  <input
+                    ref={avatarInputRef}
+                    type="file"
+                    accept="image/png,image/jpeg,image/gif,image/webp"
+                    onChange={(event) => uploadAvatarFile(event.currentTarget.files?.[0])}
+                  />
+                  <button className="secondary-button" type="button" onClick={() => avatarInputRef.current?.click()} disabled={uploadAvatar.isPending}>
+                    {uploadAvatar.isPending ? 'Uploading' : 'Upload image'}
+                  </button>
+                  <span>{uploadAvatar.data?.originalName ?? 'PNG, JPG, GIF, WebP up to 10 MB'}</span>
+                </div>
+                {avatarUploadError && <p className="form-error">{avatarUploadError}</p>}
+                <div className="profile-meta">
+                  <span>Email</span>
+                  <strong>{auth.user?.email}</strong>
+                  <span>Account</span>
+                  <strong>{auth.user?.accountStatus}</strong>
+                </div>
+                {profileError && <p className="form-error">{profileError}</p>}
+                <button className="modal-primary" disabled={!profileUsername.trim() || updateProfile.isPending || currentProfile.isLoading}>
+                  {updateProfile.isPending ? 'Saving' : 'Save changes'}
+                </button>
               </form>
             )}
 
