@@ -713,6 +713,16 @@ input:focus {
   scrollbar-color: var(--tertiary) var(--primary);
 }
 
+.message-empty {
+  margin: auto;
+  color: var(--gray);
+  font-size: 14px;
+}
+
+.message-empty.error {
+  color: #ff9a9a;
+}
+
 .message-row {
   display: grid;
   grid-template-columns: 40px minmax(0, 1fr);

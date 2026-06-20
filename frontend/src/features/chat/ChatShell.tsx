@@ -33,6 +33,7 @@ import type {
 } from '../../shared/types';
 
 type ModalMode = 'create-server' | 'join-server' | 'create-channel' | 'invite-user' | 'invite-code' | 'edit-channel' | null;
+type SendMessageVariables = { channelId: string; content: string; clientRequestId: string };
 
 function initialOf(value?: string) {
   return value?.trim().slice(0, 1).toUpperCase() || '?';
@@ -40,6 +41,24 @@ function initialOf(value?: string) {
 
 function formatTime(value: string) {
   return new Date(value).toLocaleString();
+}
+
+function messageTime(message: Message) {
+  return new Date(message.createdAt).getTime();
+}
+
+function sortMessages(messages: Message[]) {
+  return [...messages].sort((left, right) => messageTime(left) - messageTime(right));
+}
+
+function upsertMessage(messages: Message[] | undefined, next: Message) {
+  const current = messages ?? [];
+  const exists = current.some((item) => item.id === next.id);
+  return exists ? current.map((item) => (item.id === next.id ? next : item)) : [next, ...current];
+}
+
+function removeMessage(messages: Message[] | undefined, messageId: string) {
+  return (messages ?? []).filter((item) => item.id !== messageId);
 }
 
 export function ChatShell() {
@@ -125,10 +144,8 @@ export function ChatShell() {
   });
 
   const visibleMessages = searchEnabled ? searchMessages.data ?? [] : messages.data ?? [];
-  const renderedMessages = useMemo(
-    () => [...visibleMessages].sort((left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime()),
-    [visibleMessages]
-  );
+  const renderedMessages = useMemo(() => sortMessages(visibleMessages), [visibleMessages]);
+  const lastRenderedMessageId = renderedMessages[renderedMessages.length - 1]?.id;
   const onlineMembers = useMemo(() => members.data?.filter((member) => member.presenceStatus === 'ONLINE') ?? [], [members.data]);
   const offlineMembers = useMemo(() => members.data?.filter((member) => member.presenceStatus !== 'ONLINE') ?? [], [members.data]);
 
@@ -136,8 +153,11 @@ export function ChatShell() {
     if (searchEnabled) return;
     const list = messageListRef.current;
     if (!list) return;
-    list.scrollTop = list.scrollHeight;
-  }, [channelId, renderedMessages.length, searchEnabled]);
+    const frame = window.requestAnimationFrame(() => {
+      list.scrollTop = list.scrollHeight;
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [channelId, lastRenderedMessageId, renderedMessages.length, searchEnabled]);
 
   useEffect(() => {
     if (!channelId || !serverId) return;
@@ -147,13 +167,15 @@ export function ChatShell() {
       disposers.push(
         client.subscribe(`/topic/channels/${channelId}/messages`, (frame) => {
           const event = JSON.parse(frame.body) as WebSocketEvent<Message | { messageId: string }>;
+          const eventChannelId = event.channelId ?? channelId;
           if (event.eventType === 'MESSAGE_CREATED') {
-            queryClient.setQueryData<Message[]>(['messages', channelId], (old = []) => {
-              const next = event.data as Message;
-              return old.some((item) => item.id === next.id) ? old : [next, ...old];
-            });
+            queryClient.setQueryData<Message[]>(['messages', eventChannelId], (old) => upsertMessage(old, event.data as Message));
+          } else if (event.eventType === 'MESSAGE_UPDATED' || event.eventType === 'REACTION_UPDATED') {
+            queryClient.setQueryData<Message[]>(['messages', eventChannelId], (old) => upsertMessage(old, event.data as Message));
+          } else if (event.eventType === 'MESSAGE_DELETED') {
+            queryClient.setQueryData<Message[]>(['messages', eventChannelId], (old) => removeMessage(old, (event.data as { messageId: string }).messageId));
           } else {
-            queryClient.invalidateQueries({ queryKey: ['messages', channelId] });
+            queryClient.invalidateQueries({ queryKey: ['messages', eventChannelId] });
           }
         }).unsubscribe
       );
@@ -219,16 +241,18 @@ export function ChatShell() {
   });
 
   const sendMessage = useMutation({
-    mutationFn: () =>
+    mutationFn: ({ channelId, content, clientRequestId }: SendMessageVariables) =>
       unwrap(
         api.post<ApiResponse<Message>>(`/channels/${channelId}/messages`, {
-          content: message.trim(),
+          content,
           attachments: [],
-          clientRequestId: crypto.randomUUID()
+          clientRequestId
         })
       ),
     onMutate: () => setMessage(''),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['messages', channelId] })
+    onSuccess: (created, variables) => {
+      queryClient.setQueryData<Message[]>(['messages', variables.channelId], (old) => upsertMessage(old, created));
+    }
   });
 
   const joinByCode = useMutation({
@@ -317,8 +341,10 @@ export function ChatShell() {
 
   function submitMessage(event: FormEvent) {
     event.preventDefault();
-    if (message.trim() && channelId) {
-      sendMessage.mutate();
+    const content = message.trim();
+    if (content && channelId) {
+      setMessageSearch('');
+      sendMessage.mutate({ channelId, content, clientRequestId: crypto.randomUUID() });
     }
   }
 
@@ -502,28 +528,32 @@ export function ChatShell() {
         </header>
 
         <div className="message-list" ref={messageListRef}>
+          {!messages.isLoading && !searchEnabled && renderedMessages.length === 0 && <div className="message-empty">No messages yet</div>}
+          {!searchEnabled && messages.isError && <div className="message-empty error">Could not load messages</div>}
           {renderedMessages.map((item) => (
             <article className="message-row" key={item.id}>
-              <div className="message-avatar">{item.senderSnapshot.avatarUrl ? <img src={item.senderSnapshot.avatarUrl} alt="" /> : initialOf(item.senderSnapshot.username)}</div>
+              <div className="message-avatar">
+                {item.senderSnapshot?.avatarUrl ? <img src={item.senderSnapshot.avatarUrl} alt="" /> : initialOf(item.senderSnapshot?.username)}
+              </div>
               <div className="message-body">
                 <div className="message-meta">
-                  <strong>{item.senderSnapshot.displayName ?? item.senderSnapshot.username}</strong>
+                  <strong>{item.senderSnapshot?.displayName ?? item.senderSnapshot?.username ?? 'Unknown user'}</strong>
                   <time>{formatTime(item.createdAt)}</time>
                   {item.editedAt && <span>(edited)</span>}
                 </div>
                 {item.content && <p>{item.content}</p>}
-                {item.attachments.length > 0 && (
+                {(item.attachments ?? []).length > 0 && (
                   <div className="attachments">
-                    {item.attachments.map((file) => (
+                    {(item.attachments ?? []).map((file) => (
                       <a key={file.storageKey} href={file.fileUrl} target="_blank" rel="noreferrer">
                         {file.originalName}
                       </a>
                     ))}
                   </div>
                 )}
-                {item.reactions.length > 0 && (
+                {(item.reactions ?? []).length > 0 && (
                   <div className="reaction-list">
-                    {item.reactions.map((reaction) => (
+                    {(item.reactions ?? []).map((reaction) => (
                       <span key={reaction.emoji} className="reaction-chip">
                         {reaction.emoji} {reaction.userIds.length}
                       </span>
