@@ -1,0 +1,1 @@
+{"root":["./src/main.tsx","./src/app/App.tsx","./src/app/queryClient.ts","./src/features/auth/AuthView.test.tsx","./src/features/auth/AuthView.tsx","./src/features/chat/ChatShell.tsx","./src/shared/types.ts","./src/shared/api/client.test.ts","./src/shared/api/client.ts","./src/shared/api/ws.ts","./src/store/authStore.test.ts","./src/store/authStore.ts"],"version":"5.8.3"}

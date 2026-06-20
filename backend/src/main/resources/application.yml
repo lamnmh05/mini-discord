@@ -1,0 +1,53 @@
+server:
+  port: ${SERVER_PORT:8080}
+  servlet:
+    session:
+      cookie:
+        same-site: strict
+
+spring:
+  application:
+    name: mini-discord
+  data:
+    mongodb:
+      uri: "${MONGODB_URI:mongodb://localhost:27017/mini_discord?directConnection=true&replicaSet=rs0}"
+      auto-index-creation: false
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+  servlet:
+    multipart:
+      max-file-size: 10MB
+      max-request-size: 100MB
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      probes:
+        enabled: true
+
+app:
+  cors:
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:5173}
+  jwt:
+    issuer: ${JWT_ISSUER:mini-discord}
+    secret: ${JWT_SECRET:change-this-dev-secret-change-this-dev-secret}
+    access-token-minutes: ${ACCESS_TOKEN_MINUTES:15}
+  refresh-token:
+    cookie-name: refresh_token
+    days: ${REFRESH_TOKEN_DAYS:30}
+    secure: ${REFRESH_COOKIE_SECURE:false}
+    same-site: Strict
+  file:
+    upload-ttl-minutes: ${UPLOAD_TTL_MINUTES:60}
+    bucket: ${MINIO_BUCKET:mini-discord}
+    public-base-url: ${MINIO_PUBLIC_BASE_URL:http://localhost:9000}
+    allowed-mime-types: "image/png,image/jpeg,image/gif,image/webp,application/pdf,text/plain"
+  minio:
+    endpoint: ${MINIO_ENDPOINT:http://localhost:9000}
+    access-key: ${MINIO_ACCESS_KEY:minioadmin}
+    secret-key: ${MINIO_SECRET_KEY:minioadmin}
