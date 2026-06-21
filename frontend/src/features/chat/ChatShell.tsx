@@ -366,6 +366,18 @@ export function ChatShell() {
     }
   });
 
+
+  const deleteMessage = useMutation({
+    mutationFn: (messageId: string) =>
+        unwrap(api.delete<ApiResponse<{ message: string }>>(`/messages/${messageId}`)),
+    onSuccess: (_, messageId) => {
+      queryClient.setQueryData<Message[]>(['messages', channelId], (old) => removeMessage(old, messageId));
+    },
+    onError: (error: any) => {
+      alert(error.response?.data?.error?.message ?? 'Không thể xóa tin nhắn.');
+    }
+  });
+
   const joinByCode = useMutation({
     mutationFn: () => unwrap(api.post<ApiResponse<Server>>(`/invite-codes/${joinCode.trim()}/join`)),
     onMutate: () => setJoinError(''),
@@ -863,18 +875,39 @@ export function ChatShell() {
                     )}
                   </div>
 
-                  {!editingMessageId && item.senderId === auth.user?.id && (
+                  {!editingMessageId && (item.senderId === auth.user?.id || isOwner) && (
                       <div className="message-actions">
+
+                        {item.senderId === auth.user?.id && (
+                            <button
+                                title="Sửa tin nhắn"
+                                type="button"
+                                onClick={() => {
+                                  setEditingMessageId(item.id);
+                                  setEditContent(item.content || '');
+                                }}
+                            >
+                              <Pencil size={15} />
+                            </button>
+                        )}
+
                         <button
-                            title="Sửa tin nhắn"
+                            title={item.senderId === auth.user?.id ? "Xóa tin nhắn của tôi" : "Xóa tin nhắn member (Quyền OWNER)"}
                             type="button"
                             onClick={() => {
-                              setEditingMessageId(item.id);
-                              setEditContent(item.content || '');
+                              if (window.confirm('Bạn có chắc chắn muốn xóa tin nhắn này không?')) {
+                                deleteMessage.mutate(item.id);
+                              }
+                            }}
+                            disabled={deleteMessage.isPending}
+                            style={{
+                              color: '#fa777c',
+                              marginLeft: item.senderId === auth.user?.id ? '8px' : '0'
                             }}
                         >
-                          <Pencil size={15} />
+                          <Trash2 size={15} />
                         </button>
+
                       </div>
                   )}
                 </article>
