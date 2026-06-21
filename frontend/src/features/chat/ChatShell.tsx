@@ -38,7 +38,10 @@ import type {
 } from '../../shared/types';
 
 type ModalMode = 'profile' | 'create-server' | 'join-server' | 'edit-server'| 'create-channel' | 'invite-user' | 'invite-code' | 'edit-channel' | null;
-type SendMessageVariables = { channelId: string; content: string; clientRequestId: string; attachments: Attachment[] };type TypingPayload = { userId: string; username: string; typing: boolean };
+
+type SendMessageVariables = { channelId: string; content: string; clientRequestId: string; attachments: Attachment[] };
+
+type TypingPayload = { userId: string; username: string; typing: boolean };
 type TypingUser = { userId: string; username: string };
 
 function initialOf(value?: string) {
@@ -1064,14 +1067,40 @@ export function ChatShell() {
                         <>
                           {item.content && <p>{item.content}</p>}
                           {(item.attachments ?? []).length > 0 && (
-                              <div className="attachments">
-                                {(item.attachments ?? []).map((file) => (
-                                    <a key={file.storageKey} href={file.fileUrl} target="_blank" rel="noreferrer">
-                                      {file.originalName}
-                                    </a>
-                                ))}
-                              </div>
-                          )}
+                            <div className="attachments" style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '8px' }}>
+                              {(item.attachments ?? []).map((file) => {
+                                // Kiểm tra xem file đính kèm có phải là hình ảnh không dựa trên mimeType hoặc đuôi mở rộng
+                                const isImage = file.mimeType?.startsWith('image/') ||
+                                                /\.(jpg|jpeg|png|gif|webp)$/i.test(file.fileUrl || file.originalName);
+
+                                return isImage ? (
+                                  /* Nếu là ảnh: Hiển thị Preview ảnh trực quan theo yêu cầu UC25 */
+                                  <div
+                                    key={file.storageKey}
+                                    className="attachment-image-preview"
+                                    style={{
+                                      maxWidth: '320px',
+                                      maxHeight: '240px',
+                                      overflow: 'hidden',
+                                      borderRadius: '6px',
+                                      border: '1px solid rgba(255, 255, 255, 0.1)'
+                                    }}
+                                  >
+                                    <img
+                                      src={file.fileUrl}
+                                      alt={file.originalName}
+                                      style={{ width: '100%', height: '100%', objectFit: 'contain', display: 'block' }}
+                                    />
+                                  </div>
+                                ) : (
+                                  /* Nếu là file tài liệu khác (.docx, .pdf...): Hiển thị link tải về */
+                                  <a key={file.storageKey} href={file.fileUrl} target="_blank" rel="noreferrer">
+                                    📄 {file.originalName}
+                                  </a>
+                                );
+                              })}
+                            </div>
+                        )}
                           {(item.reactions ?? []).length > 0 && (
                               <div className="reaction-list">
                                 {(item.reactions ?? []).map((reaction) => {
@@ -1187,40 +1216,41 @@ export function ChatShell() {
           <form className="composer" onSubmit={submitMessage}>
             <div style={{ display: 'flex', flexDirection: 'column', width: '100%' }}>
 
-              {/* Vùng hiển thị hàng đợi các tệp đã upload thành công nhưng chưa bấm nút gửi */}
-              {chatAttachments.length > 0 && (
-                <div className="attachments" style={{ marginBottom: '8px', padding: '0 8px' }}>
-                  {chatAttachments.map((file, idx) => (
-                    <span
-                      key={file.storageKey || idx}
-                      style={{
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: '8px',
-                        background: 'var(--tertiary)',
-                        padding: '4px 8px',
-                        borderRadius: '4px',
-                        fontSize: '13px'
-                      }}
-                    >
-                      <span style={{ maxWidth: '160px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--white)' }}>
-                        {file.originalName}
-                      </span>
-                      {/* Nút hỗ trợ người dùng xóa tệp đính kèm nếu đổi ý */}
-                      <button
-                        type="button"
-                        onClick={() => setChatAttachments(prev => prev.filter((_, i) => i !== idx))}
-                        style={{ border: 0, background: 'transparent', color: '#fa777c', padding: 0, display: 'flex' }}
+              {/* VÙNG CHỨA CỐ ĐỊNH: Giúp giữ vị trí của input bên dưới luôn ổn định */}
+              <div className="chat-attachments-wrapper">
+                {chatAttachments.length > 0 && (
+                  <div className="attachments" style={{ marginBottom: '8px', padding: '0 8px' }}>
+                    {chatAttachments.map((file, idx) => (
+                      <span
+                        key={file.storageKey || idx}
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '8px',
+                          background: 'var(--tertiary)',
+                          padding: '4px 8px',
+                          borderRadius: '4px',
+                          fontSize: '13px'
+                        }}
                       >
-                        <X size={14} />
-                      </button>
-                    </span>
-                  ))}
-                </div>
-              )}
+                        <span style={{ maxWidth: '160px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--white)' }}>
+                          {file.originalName}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setChatAttachments(prev => prev.filter((_, i) => i !== idx))}
+                          style={{ border: 0, background: 'transparent', color: '#fa777c', padding: 0, display: 'flex' }}
+                        >
+                          <X size={14} />
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
 
+              {/* HỘP NHẬP LIỆU: Luôn là con thứ hai cố định, không bao giờ bị remount */}
               <div className="composer-input" style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                {/* Input chọn tệp ẩn từ hệ thống */}
                 <input
                   ref={chatFileInputRef}
                   type="file"
@@ -1228,7 +1258,6 @@ export function ChatShell() {
                   onChange={(event) => handleChatFileChange(event.currentTarget.files?.[0])}
                 />
 
-                {/* Nút Plus hình tròn kích hoạt chọn file */}
                 <button
                   type="button"
                   title="Upload file"
@@ -1242,13 +1271,12 @@ export function ChatShell() {
                 <input
                   value={message}
                   onChange={(event) => setMessage(event.target.value)}
-                  placeholder={uploadChatFile.isPending ? "Đang tải tệp đính kèm lên hệ thống..." : `Message #${activeChannel?.name ?? ''}`}
+                  placeholder={uploadChatFile.isPending ? "Đang tải tệp đính kèm..." : `Message #${activeChannel?.name ?? ''}`}
                   disabled={uploadChatFile.isPending}
                 />
               </div>
             </div>
 
-            {/* Mở khóa nút gửi nếu có chữ HOẶC có file trong hàng đợi */}
             <button
               title="Send"
               type="submit"
