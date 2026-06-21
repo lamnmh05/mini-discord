@@ -69,6 +69,7 @@ export function ChatShell() {
   const auth = useAuthStore();
   const messageListRef = useRef<HTMLDivElement>(null);
   const avatarInputRef = useRef<HTMLInputElement>(null);
+  const isEditingRef = useRef(false);
   const [serverId, setServerId] = useState<string>();
   const [channelId, setChannelId] = useState<string>();
   const [message, setMessage] = useState('');
@@ -807,15 +808,31 @@ export function ChatShell() {
                               value={editContent}
                               onChange={(e) => setEditContent(e.target.value)}
                               onKeyDown={(e) => {
+                                if (e.nativeEvent.isComposing) return;
+
                                 if (e.key === 'Enter' && !e.shiftKey) {
                                   e.preventDefault();
+
+                                  if (isEditingRef.current) return;
+
                                   if (editContent.trim() && editContent.trim() !== item.content) {
-                                    editMessage.mutate({ messageId: item.id, content: editContent.trim() });
+
+                                    isEditingRef.current = true;
+
+                                    editMessage.mutate(
+                                        { messageId: item.id, content: editContent.trim() },
+                                        {
+
+                                          onSettled: () => {
+                                            isEditingRef.current = false;
+                                          }
+                                        }
+                                    );
                                   } else {
-                                    setEditingMessageId(null); // Không có thay đổi gì thì hủy edit
+                                    setEditingMessageId(null);
                                   }
                                 } else if (e.key === 'Escape') {
-                                  setEditingMessageId(null); // Bấm ESC để hủy
+                                  setEditingMessageId(null);
                                 }
                               }}
                           />
