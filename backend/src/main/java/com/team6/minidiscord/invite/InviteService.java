@@ -79,7 +79,7 @@ public class InviteService {
         if (request.expiresAt() != null) {
             invite.expiresAt = request.expiresAt();
         } else {
-            invite.expiresAt = Instant.now().plusSeconds(7 * 24 * 60 * 60));
+            invite.expiresAt = Instant.now().plusSeconds(7 * 24 * 60 * 60);
         }
         invite.createdAt = Instant.now();
         return InviteMapper.code(inviteCodeRepository.save(invite));

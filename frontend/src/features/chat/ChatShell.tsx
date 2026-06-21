@@ -238,7 +238,19 @@ export function ChatShell() {
       alert(error.response?.data?.error?.message ?? 'Không thể rời server.');
     }
   });
-
+// DELETE SERVER (UC12) ===
+  const deleteServer = useMutation({
+    mutationFn: () => unwrap(api.delete<ApiResponse<{ message: string }>>(`/servers/${serverId}`)),
+    onSuccess: () => {
+      setServerId(undefined);
+      setChannelId(undefined);
+      setServerMenuOpen(false);
+      queryClient.invalidateQueries({ queryKey: ['servers'] });
+    },
+    onError: (error: any) => {
+      alert(error.response?.data?.error?.message ?? 'Không thể xóa server.');
+    }
+  });
 
 
   const createChannel = useMutation({
@@ -508,6 +520,7 @@ export function ChatShell() {
               <span>{activeServer?.name ?? 'Mini Discord'}</span>
               <ChevronDown size={20} />
             </button>
+          
 
             {serverMenuOpen && (
                 <div className="server-menu">
@@ -543,6 +556,19 @@ export function ChatShell() {
                           Direct invite
                         </button>
 
+                        <button
+                        type="button"
+                        style={{ color: '#fa777c', fontWeight: 'bold' }}
+                        onClick={() => {
+                          if (window.confirm(`⚠️ CẢNH BÁO NGUY HIỂM:\nBạn có chắc chắn muốn XÓA HOÀN TOÀN server "${activeServer?.name}" không?\nHành động này sẽ hủy kích hoạt toàn bộ các Channel và Invite Code liên quan và không thể hoàn tác!`)) {
+                            deleteServer.mutate();
+                          }
+                        }}
+                        disabled={deleteServer.isPending}
+                      >
+                        {deleteServer.isPending ? 'Đang xóa...' : 'Delete server'}
+                      </button>
+
                       </>
                   )}
                 </div>
@@ -572,6 +598,8 @@ export function ChatShell() {
                   <button title="Direct invite" type="button" onClick={() => openModal('invite-user', channel)}>
                     <UserPlus size={16} />
                   </button>
+
+
                   <button title="Channel settings" type="button" onClick={() => openModal('edit-channel', channel)}>
                     <Settings size={16} />
                   </button>
