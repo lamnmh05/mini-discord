@@ -822,9 +822,14 @@ export function ChatShell() {
                     <h2>Server settings</h2>
 
                     <div className="profile-card">
-                      <div className="server-edit-avatar">
+                      <button
+                          type="button"
+                          className="server-edit-avatar"
+                          onClick={() => serverIconInputRef.current?.click()}
+                          title="Thay đổi Icon"
+                      >
                         {serverIconUrl.trim() ? <img src={serverIconUrl.trim()} alt="" /> : initialOf(serverName || activeServer?.name)}
-                      </div>
+                      </button>
                       <div>
                         <strong>{serverName.trim() || activeServer?.name}</strong>
                         <span>Server Owner Cài đặt</span>
@@ -885,9 +890,14 @@ export function ChatShell() {
                     <form onSubmit={(event) => { event.preventDefault(); if (profileUsername.trim()) updateProfile.mutate(); }}>
                       <h2>Profile</h2>
                       <div className="profile-card">
-                        <div className="server-edit-avatar">
+                        <button
+                            type="button"
+                            className="profile-avatar"
+                            onClick={() => avatarInputRef.current?.click()}
+                            title="Thay đổi Avatar"
+                        >
                           {profileAvatarUrl.trim() ? <img src={profileAvatarUrl.trim()} alt="" /> : initialOf(profileUsername || auth.user?.username)}
-                        </div>
+                        </button>
                         <div>
                           <strong>{profileDisplayName.trim() || profileUsername || auth.user?.username}</strong>
                           <span>{profileCustomStatus.trim() || auth.user?.email}</span>
