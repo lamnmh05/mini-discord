@@ -13,6 +13,7 @@ import {
   Settings,
   Trash2,
   UserPlus,
+  UserMinus,
   Users,
   X
 } from 'lucide-react';
@@ -404,6 +405,19 @@ export function ChatShell() {
   const rejectInvite = useMutation({
     mutationFn: (inviteId: string) => unwrap(api.post<ApiResponse<{ message: string }>>(`/server-invites/${inviteId}/reject`)),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['received-invites'] })
+  });
+
+
+  // Xóa member khỏi server
+  const kickMember = useMutation({
+    mutationFn: (targetUserId: string) =>
+        unwrap(api.delete<ApiResponse<{ message: string }>>(`/servers/${serverId}/members/${targetUserId}`)),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['members', serverId] }); // Tải lại danh sách members
+    },
+    onError: (error: any) => {
+      alert(error.response?.data?.error?.message ?? 'Không thể kick member.');
+    }
   });
 
   const markAllRead = useMutation({
@@ -799,10 +813,30 @@ export function ChatShell() {
         </section>
 
         <aside className="member-column">
-          <MemberGroup title={`Online - ${onlineMembers.length}`} members={onlineMembers} />
-          <MemberGroup title={`Offline - ${offlineMembers.length}`} members={offlineMembers} offline />
-        </aside>
-
+          <MemberGroup
+              title={`Online - ${onlineMembers.length}`}
+              members={onlineMembers}
+              isOwner={isOwner}
+              currentUserId={auth.user?.id}
+              onKick={(targetId, targetName) => {
+                if (window.confirm(`Bạn có chắc chắn muốn kick ${targetName} khỏi server không?`)) {
+                  kickMember.mutate(targetId);
+                }
+              }}
+          />
+          <MemberGroup
+              title={`Offline - ${offlineMembers.length}`}
+              members={offlineMembers}
+              offline
+              isOwner={isOwner}
+              currentUserId={auth.user?.id}
+              onKick={(targetId, targetName) => {
+                if (window.confirm(`Bạn có chắc chắn muốn kick ${targetName} khỏi server không?`)) {
+                  kickMember.mutate(targetId);
+                }
+              }}
+          />
+        </aside>ber
         {modal && (
             <div className="modal-backdrop" role="presentation" onMouseDown={closeModal}>
               <div className="modal" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}>
@@ -1021,7 +1055,14 @@ export function ChatShell() {
   );
 }
 
-function MemberGroup({ title, members, offline }: { title: string; members: Member[]; offline?: boolean }) {
+function MemberGroup({title, members, offline, isOwner, currentUserId, onKick}: {
+  title: string;
+  members: Member[];
+  offline?: boolean;
+  isOwner?: boolean;
+  currentUserId?: string;
+  onKick?: (userId: string, username: string) => void;
+}) {
   return (
       <section className="member-group">
         <span>{title}</span>
@@ -1029,7 +1070,22 @@ function MemberGroup({ title, members, offline }: { title: string; members: Memb
             <div className={`member-row ${offline ? 'offline' : ''}`} key={member.userId}>
               <div className="small-avatar">{member.avatarUrl ? <img src={member.avatarUrl} alt="" /> : initialOf(member.username)}</div>
               <strong>{member.displayName ?? member.username}</strong>
+
               {member.role === 'OWNER' && <em>OWNER</em>}
+
+              {/* Nút Kick chỉ hiện cho OWNER, không hiện ở chính bản thân mình và không được kick OWNER khác */}
+              {isOwner && member.userId !== currentUserId && member.role !== 'OWNER' && (
+                  <button
+                      className="kick-button"
+                      title="Kick Member"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onKick?.(member.userId, member.displayName ?? member.username);
+                      }}
+                  >
+                    <UserMinus size={16} />
+                  </button>
+              )}
             </div>
         ))}
       </section>
