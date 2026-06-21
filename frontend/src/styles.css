@@ -557,7 +557,7 @@ input:focus {
   min-width: 0;
   min-height: 0;
   display: grid;
-  grid-template-rows: 46px minmax(0, 1fr) 72px;
+  grid-template-rows: 46px minmax(0, 1fr) 24px 72px;
   background: var(--primary);
 }
 
@@ -869,6 +869,18 @@ input:focus {
 .message-edit-composer small b {
   color: var(--link);
   font-weight: normal;
+}
+
+.typing-indicator {
+  min-width: 0;
+  min-height: 24px;
+  padding: 0 16px;
+  color: #b5bac1;
+  font-size: 13px;
+  line-height: 24px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .attachments {

@@ -22,3 +22,7 @@ export function disconnectStomp() {
   client?.deactivate();
   client = undefined;
 }
+
+export function currentStompClient() {
+  return client;
+}

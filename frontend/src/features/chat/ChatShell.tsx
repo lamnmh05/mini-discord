@@ -20,7 +20,7 @@ import {
   X
 } from 'lucide-react';
 import { api, unwrap } from '../../shared/api/client';
-import { disconnectStomp, stompClient } from '../../shared/api/ws';
+import { currentStompClient, disconnectStomp, stompClient } from '../../shared/api/ws';
 import { queryClient } from '../../app/queryClient';
 import { useAuthStore } from '../../store/authStore';
 import type {
@@ -39,6 +39,8 @@ import type {
 
 type ModalMode = 'profile' | 'create-server' | 'join-server' | 'edit-server'| 'create-channel' | 'invite-user' | 'invite-code' | 'edit-channel' | null;
 type SendMessageVariables = { channelId: string; content: string; clientRequestId: string };
+type TypingPayload = { userId: string; username: string; typing: boolean };
+type TypingUser = { userId: string; username: string };
 
 function initialOf(value?: string) {
   return value?.trim().slice(0, 1).toUpperCase() || '?';
@@ -66,11 +68,21 @@ function removeMessage(messages: Message[] | undefined, messageId: string) {
   return (messages ?? []).filter((item) => item.id !== messageId);
 }
 
+function typingSummary(names: string[]) {
+  if (names.length === 0) return '';
+  if (names.length === 1) return `${names[0]} is typing...`;
+  if (names.length === 2) return `${names[0]} and ${names[1]} are typing...`;
+  return `${names[0]}, ${names[1]} and ${names.length - 2} others are typing...`;
+}
+
 export function ChatShell() {
   const auth = useAuthStore();
   const messageListRef = useRef<HTMLDivElement>(null);
   const avatarInputRef = useRef<HTMLInputElement>(null);
   const isEditingRef = useRef(false);
+  const typingStartedRef = useRef(false);
+  const typingStopTimerRef = useRef<number | undefined>(undefined);
+  const typingUserTimersRef = useRef<Record<string, number>>({});
   const [serverId, setServerId] = useState<string>();
   const [channelId, setChannelId] = useState<string>();
   const [message, setMessage] = useState('');
@@ -94,6 +106,7 @@ export function ChatShell() {
   const [selectedChannel, setSelectedChannel] = useState<Channel>();
   const [serverMenuOpen, setServerMenuOpen] = useState(false);
   const [notificationOpen, setNotificationOpen] = useState(false);
+  const [typingUsers, setTypingUsers] = useState<Record<string, TypingUser>>({});
 
   // edit server
   const [serverIconUrl, setServerIconUrl] = useState('');
@@ -177,6 +190,32 @@ export function ChatShell() {
   const lastRenderedMessageId = renderedMessages[renderedMessages.length - 1]?.id;
   const onlineMembers = useMemo(() => members.data?.filter((member) => member.presenceStatus === 'ONLINE') ?? [], [members.data]);
   const offlineMembers = useMemo(() => members.data?.filter((member) => member.presenceStatus !== 'ONLINE') ?? [], [members.data]);
+  const visibleNotifications = useMemo(
+    () => (notifications.data ?? []).filter((notification) => notification.type !== 'SERVER_INVITE' && !notification.serverInviteId),
+    [notifications.data]
+  );
+  const unreadInviteNotificationIds = useMemo(
+    () =>
+      new Set(
+        (notifications.data ?? [])
+          .filter((notification) => notification.type === 'SERVER_INVITE' && notification.serverInviteId)
+          .map((notification) => notification.serverInviteId)
+      ),
+    [notifications.data]
+  );
+  const unreadInviteCount = useMemo(
+    () => (receivedInvites.data ?? []).filter((invite) => unreadInviteNotificationIds.has(invite.id)).length,
+    [receivedInvites.data, unreadInviteNotificationIds]
+  );
+  const unreadNotificationCount = notifications.data?.length ?? 0;
+  const notificationCount = visibleNotifications.length + unreadInviteCount;
+  const typingText = useMemo(() => {
+    const names = Object.values(typingUsers).map((typingUser) => {
+      const member = members.data?.find((item) => item.userId === typingUser.userId);
+      return member?.displayName ?? member?.username ?? typingUser.username;
+    });
+    return typingSummary(names);
+  }, [members.data, typingUsers]);
 
   useEffect(() => {
     if (searchEnabled) return;
@@ -209,6 +248,37 @@ export function ChatShell() {
           }).unsubscribe
       );
       disposers.push(
+          client.subscribe(`/topic/channels/${channelId}/typing`, (frame) => {
+            const event = JSON.parse(frame.body) as WebSocketEvent<TypingPayload>;
+            const typing = event.data;
+            if (!typing?.userId || typing.userId === auth.user?.id) return;
+
+            window.clearTimeout(typingUserTimersRef.current[typing.userId]);
+
+            if (typing.typing) {
+              setTypingUsers((current) => ({
+                ...current,
+                [typing.userId]: { userId: typing.userId, username: typing.username }
+              }));
+              typingUserTimersRef.current[typing.userId] = window.setTimeout(() => {
+                setTypingUsers((current) => {
+                  const next = { ...current };
+                  delete next[typing.userId];
+                  return next;
+                });
+                delete typingUserTimersRef.current[typing.userId];
+              }, 5000);
+            } else {
+              setTypingUsers((current) => {
+                const next = { ...current };
+                delete next[typing.userId];
+                return next;
+              });
+              delete typingUserTimersRef.current[typing.userId];
+            }
+          }).unsubscribe
+      );
+      disposers.push(
           client.subscribe(`/topic/servers/${serverId}/presence`, () => {
             queryClient.invalidateQueries({ queryKey: ['members', serverId] });
           }).unsubscribe
@@ -225,8 +295,18 @@ export function ChatShell() {
     } else {
       client.onConnect = subscribe;
     }
-    return () => disposers.forEach((dispose) => dispose());
-  }, [channelId, serverId]);
+    return () => {
+      disposers.forEach((dispose) => dispose());
+      Object.values(typingUserTimersRef.current).forEach((timer) => window.clearTimeout(timer));
+      typingUserTimersRef.current = {};
+      setTypingUsers({});
+    };
+  }, [channelId, serverId, auth.user?.id]);
+
+  useEffect(() => {
+    setTypingUsers({});
+    return () => stopTyping(channelId);
+  }, [channelId]);
 
   const createServer = useMutation({
     mutationFn: () => unwrap(api.post<ApiResponse<Server>>('/servers', { name: serverName.trim() })),
@@ -447,6 +527,7 @@ export function ChatShell() {
     mutationFn: (inviteId: string) => unwrap(api.post<ApiResponse<Server>>(`/server-invites/${inviteId}/accept`)),
     onSuccess: (server) => {
       queryClient.invalidateQueries({ queryKey: ['received-invites'] });
+      queryClient.invalidateQueries({ queryKey: ['notifications'] });
       queryClient.invalidateQueries({ queryKey: ['servers'] });
       setServerId(server.id);
       setChannelId(server.defaultChannelId);
@@ -455,7 +536,10 @@ export function ChatShell() {
 
   const rejectInvite = useMutation({
     mutationFn: (inviteId: string) => unwrap(api.post<ApiResponse<{ message: string }>>(`/server-invites/${inviteId}/reject`)),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['received-invites'] })
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['received-invites'] });
+      queryClient.invalidateQueries({ queryKey: ['notifications'] });
+    }
   });
 
 
@@ -473,7 +557,10 @@ export function ChatShell() {
 
   const markAllRead = useMutation({
     mutationFn: () => unwrap(api.patch<ApiResponse<{ message: string }>>('/notifications/read-all')),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['notifications'] })
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['notifications'] });
+      queryClient.invalidateQueries({ queryKey: ['received-invites'] });
+    }
   });
 
   const updateProfile = useMutation({
@@ -587,15 +674,61 @@ export function ChatShell() {
   }
 
   async function logout() {
+    stopTyping(channelId);
     await api.post('/auth/logout').catch(() => undefined);
     disconnectStomp();
     auth.clear();
+  }
+
+  function publishTyping(isTyping: boolean, targetChannelId = channelId, ensureActive = true) {
+    if (!targetChannelId) return;
+    const client = ensureActive ? stompClient() : currentStompClient();
+    if (!client?.connected) return;
+    client.publish({
+      destination: `/app/channels/${targetChannelId}/typing`,
+      body: JSON.stringify({ typing: isTyping })
+    });
+  }
+
+  function stopTyping(targetChannelId = channelId) {
+    if (typingStopTimerRef.current) {
+      window.clearTimeout(typingStopTimerRef.current);
+      typingStopTimerRef.current = undefined;
+    }
+    if (!typingStartedRef.current) return;
+    typingStartedRef.current = false;
+    publishTyping(false, targetChannelId, false);
+  }
+
+  function startTyping() {
+    if (!channelId) return;
+    if (!typingStartedRef.current) {
+      typingStartedRef.current = true;
+      publishTyping(true, channelId);
+    }
+    if (typingStopTimerRef.current) {
+      window.clearTimeout(typingStopTimerRef.current);
+    }
+    const targetChannelId = channelId;
+    typingStopTimerRef.current = window.setTimeout(() => {
+      stopTyping(targetChannelId);
+    }, 2000);
+  }
+
+  function handleComposerChange(value: string) {
+    setMessage(value);
+    if (value.trim()) {
+      startTyping();
+    } else {
+      stopTyping(channelId);
+    }
   }
 
   function submitMessage(event: FormEvent) {
     event.preventDefault();
     const content = message.trim();
     if (content && channelId) {
+      stopTyping(channelId);
       setMessageSearch('');
       sendMessage.mutate({ channelId, content, clientRequestId: crypto.randomUUID() });
     }
@@ -762,8 +895,8 @@ export function ChatShell() {
             <div className="header-actions">
               <button className="header-icon" title="Notifications" type="button" onClick={() => setNotificationOpen((open) => !open)}>
                 <Bell size={20} />
-                {(notifications.data?.length ?? 0) + (receivedInvites.data?.length ?? 0) > 0 && (
-                    <span className="badge">{(notifications.data?.length ?? 0) + (receivedInvites.data?.length ?? 0)}</span>
+                {notificationCount > 0 && (
+                    <span className="badge">{notificationCount}</span>
                 )}
               </button>
               <Users size={20} />
@@ -776,20 +909,20 @@ export function ChatShell() {
                   <div className="notification-popover">
                     <div className="popover-head">
                       <strong>Notifications</strong>
-                      <button type="button" onClick={() => markAllRead.mutate()} disabled={!notifications.data?.length}>
+                      <button type="button" onClick={() => markAllRead.mutate()} disabled={!unreadNotificationCount || markAllRead.isPending}>
                         Mark read
                       </button>
                     </div>
-                    {notifications.data?.length ? (
-                        notifications.data.map((item) => (
+                    {visibleNotifications.length ? (
+                        visibleNotifications.map((item) => (
                             <article key={item.id} className="notification-item">
                               <strong>{item.title}</strong>
                               <p>{item.body}</p>
                             </article>
                         ))
-                    ) : (
+                    ) : (receivedInvites.data?.length ?? 0) === 0 ? (
                         <p className="empty-copy">No unread notifications</p>
-                    )}
+                    ) : null}
 
                     {(receivedInvites.data?.length ?? 0) > 0 && (
                         <>
@@ -987,9 +1120,18 @@ export function ChatShell() {
             ))}
           </div>
 
+          <div className="typing-indicator" aria-live="polite">
+            {typingText}
+          </div>
+
           <form className="composer" onSubmit={submitMessage}>
             <div className="composer-input">
-              <input value={message} onChange={(event) => setMessage(event.target.value)} placeholder={`Message #${activeChannel?.name ?? ''}`} />
+              <input
+                  value={message}
+                  onBlur={() => stopTyping(channelId)}
+                  onChange={(event) => handleComposerChange(event.target.value)}
+                  placeholder={`Message #${activeChannel?.name ?? ''}`}
+              />
             </div>
             <button title="Send" type="submit" disabled={!message.trim()}>
               <Send size={20} />

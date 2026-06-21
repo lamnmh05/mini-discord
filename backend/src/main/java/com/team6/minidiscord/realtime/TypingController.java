@@ -2,11 +2,15 @@ package com.team6.minidiscord.realtime;
 
 import com.team6.minidiscord.channel.ChannelDocument;
 import com.team6.minidiscord.channel.ChannelService;
+import com.team6.minidiscord.common.error.ApiException;
+import com.team6.minidiscord.common.error.ErrorCode;
+import com.team6.minidiscord.common.util.ObjectIds;
 import com.team6.minidiscord.membership.MembershipService;
 import com.team6.minidiscord.security.AuthenticatedUser;
 import org.springframework.messaging.handler.annotation.DestinationVariable;
 import org.springframework.messaging.handler.annotation.MessageMapping;
 import org.springframework.messaging.simp.SimpMessageHeaderAccessor;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.stereotype.Controller;
 
 import java.util.Map;
@@ -25,15 +29,23 @@ public class TypingController {
 
     @MessageMapping("/channels/{channelId}/typing")
     public void typing(@DestinationVariable String channelId, Map<String, Boolean> payload, SimpMessageHeaderAccessor headers) {
-        AuthenticatedUser user = (AuthenticatedUser) ((org.springframework.security.authentication.UsernamePasswordAuthenticationToken) headers.getUser()).getPrincipal();
-        ChannelDocument channel = channelService.requireActiveChannel(com.team6.minidiscord.common.util.ObjectIds.parse(channelId));
+        AuthenticatedUser user = currentUser(headers);
+        ChannelDocument channel = channelService.requireActiveChannel(ObjectIds.parse(channelId));
         membershipService.requireMember(channel.serverId, user.id());
-        boolean typing = Boolean.TRUE.equals(payload.get("typing"));
+        boolean typing = payload != null && Boolean.TRUE.equals(payload.get("typing"));
         publisher.typingEvent(channelId, WebSocketEvent.of(
                 typing ? "TYPING_STARTED" : "TYPING_STOPPED",
                 channel.serverId.toHexString(),
                 channelId,
                 Map.of("userId", user.id().toHexString(), "username", user.username(), "typing", typing)
         ));
+    }
+
+    private AuthenticatedUser currentUser(SimpMessageHeaderAccessor headers) {
+        if (headers.getUser() instanceof UsernamePasswordAuthenticationToken token
+                && token.getPrincipal() instanceof AuthenticatedUser user) {
+            return user;
+        }
+        throw new ApiException(ErrorCode.UNAUTHENTICATED, "WebSocket is not authenticated.");
     }
 }
