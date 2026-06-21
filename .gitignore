@@ -20,3 +20,4 @@ infra/mongo-data/
 infra/redis-data/
 
 *.log
+folder_tree.md 
