@@ -1038,6 +1038,24 @@ input:focus {
   flex-shrink: 0;
 }
 
+.role-select {
+  flex: 0 0 auto;
+  width: 86px;
+  min-height: 26px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 4px;
+  padding: 0 6px;
+  color: #d8dbe2;
+  background: var(--quaternary);
+  font-size: 11px;
+  font-weight: 700;
+  outline: none;
+}
+
+.role-select:focus {
+  border-color: var(--discord);
+}
+
 .kick-button {
   background: transparent;
   border: none;

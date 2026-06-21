@@ -289,6 +289,9 @@ export function ChatShell() {
             queryClient.invalidateQueries({ queryKey: ['received-invites'] });
           }).unsubscribe
       );
+      if (typingStartedRef.current) {
+        publishTyping(true, channelId, false);
+      }
     };
     if (client.connected) {
       subscribe();
@@ -552,6 +555,21 @@ export function ChatShell() {
     },
     onError: (error: any) => {
       alert(error.response?.data?.error?.message ?? 'Không thể kick member.');
+    }
+  });
+
+  const changeMemberRole = useMutation({
+    mutationFn: ({ userId, role }: { userId: string; role: Member['role'] }) =>
+        unwrap(api.patch<ApiResponse<Member>>(`/servers/${serverId}/members/${userId}/role`, { role })),
+    onSuccess: (updatedMember) => {
+      queryClient.setQueryData<Member[]>(['members', serverId], (old = []) =>
+          old.map((member) => (member.userId === updatedMember.userId ? updatedMember : member))
+      );
+      queryClient.invalidateQueries({ queryKey: ['members', serverId] });
+      queryClient.invalidateQueries({ queryKey: ['servers'] });
+    },
+    onError: (error: any) => {
+      alert(error.response?.data?.error?.message ?? 'Khong the doi role member.');
     }
   });
 
@@ -1150,6 +1168,11 @@ export function ChatShell() {
                   kickMember.mutate(targetId);
                 }
               }}
+              onRoleChange={(targetId, targetName, role) => {
+                if (window.confirm(`Change ${targetName} role to ${role}?`)) {
+                  changeMemberRole.mutate({ userId: targetId, role });
+                }
+              }}
           />
           <MemberGroup
               title={`Offline - ${offlineMembers.length}`}
@@ -1160,6 +1183,11 @@ export function ChatShell() {
               onKick={(targetId, targetName) => {
                 if (window.confirm(`Bạn có chắc chắn muốn kick ${targetName} khỏi server không?`)) {
                   kickMember.mutate(targetId);
+                }
+              }}
+              onRoleChange={(targetId, targetName, role) => {
+                if (window.confirm(`Change ${targetName} role to ${role}?`)) {
+                  changeMemberRole.mutate({ userId: targetId, role });
                 }
               }}
           />
@@ -1382,13 +1410,14 @@ export function ChatShell() {
   );
 }
 
-function MemberGroup({title, members, offline, isOwner, currentUserId, onKick}: {
+function MemberGroup({title, members, offline, isOwner, currentUserId, onKick, onRoleChange}: {
   title: string;
   members: Member[];
   offline?: boolean;
   isOwner?: boolean;
   currentUserId?: string;
   onKick?: (userId: string, username: string) => void;
+  onRoleChange?: (userId: string, username: string, role: Member['role']) => void;
 }) {
   return (
       <section className="member-group">
@@ -1399,6 +1428,23 @@ function MemberGroup({title, members, offline, isOwner, currentUserId, onKick}: 
               <strong>{member.displayName ?? member.username}</strong>
 
               {member.role === 'OWNER' && <em>OWNER</em>}
+
+              {isOwner && member.userId !== currentUserId && (
+                  <select
+                      className="role-select"
+                      title="Change role"
+                      value={member.role}
+                      onChange={(event) => {
+                        const nextRole = event.target.value as Member['role'];
+                        if (nextRole !== member.role) {
+                          onRoleChange?.(member.userId, member.displayName ?? member.username, nextRole);
+                        }
+                      }}
+                  >
+                    <option value="MEMBER">MEMBER</option>
+                    <option value="OWNER">OWNER</option>
+                  </select>
+              )}
 
               {/* Nút Kick chỉ hiện cho OWNER, không hiện ở chính bản thân mình và không được kick OWNER khác */}
               {isOwner && member.userId !== currentUserId && member.role !== 'OWNER' && (
