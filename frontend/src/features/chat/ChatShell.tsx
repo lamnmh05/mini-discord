@@ -38,8 +38,7 @@ import type {
 } from '../../shared/types';
 
 type ModalMode = 'profile' | 'create-server' | 'join-server' | 'edit-server'| 'create-channel' | 'invite-user' | 'invite-code' | 'edit-channel' | null;
-type SendMessageVariables = { channelId: string; content: string; clientRequestId: string };
-type TypingPayload = { userId: string; username: string; typing: boolean };
+type SendMessageVariables = { channelId: string; content: string; clientRequestId: string; attachments: Attachment[] };type TypingPayload = { userId: string; username: string; typing: boolean };
 type TypingUser = { userId: string; username: string };
 
 function initialOf(value?: string) {
@@ -113,6 +112,10 @@ export function ChatShell() {
   const [serverEditError, setServerEditError] = useState('');
   const [serverIconUploadError, setServerIconUploadError] = useState('');
   const serverIconInputRef = useRef<HTMLInputElement>(null);
+
+  const [chatAttachments, setChatAttachments] = useState<Attachment[]>([]);
+  const chatFileInputRef = useRef<HTMLInputElement>(null);
+
 
   const servers = useQuery({
     queryKey: ['servers'],
@@ -419,20 +422,54 @@ export function ChatShell() {
   });
 
   const sendMessage = useMutation({
-    mutationFn: ({ channelId, content, clientRequestId }: SendMessageVariables) =>
+    mutationFn: ({ channelId, content, clientRequestId, attachments }: SendMessageVariables) =>
         unwrap(
             api.post<ApiResponse<Message>>(`/channels/${channelId}/messages`, {
               content,
-              attachments: [],
+              attachments, // <-- Thay vì truyền mảng [] rỗng, truyền dữ liệu file ở đây
               clientRequestId
             })
         ),
     onMutate: () => setMessage(''),
     onSuccess: (created, variables) => {
       queryClient.setQueryData<Message[]>(['messages', variables.channelId], (old) => upsertMessage(old, created));
+      setChatAttachments([]); // <-- Xóa danh sách file đính kèm tạm thời sau khi gửi thành công
     }
   });
 
+  const uploadChatFile = useMutation({
+    mutationFn: (file: File) => {
+      const form = new FormData();
+      form.append('file', file);
+      form.append('purpose', 'message'); // Đánh dấu mục đích upload cho chat message
+      return unwrap(api.post<ApiResponse<Attachment>>('/files', form));
+    },
+    onSuccess: (uploadedAttachment) => {
+      setChatAttachments((prev) => {
+        // Kiểm tra quy định nghiệp vụ BR-FILE-002: Không quá 10 file/tin nhắn
+        if (prev.length >= 10) {
+          alert('Mỗi tin nhắn chỉ được đính kèm tối đa 10 tệp tin.');
+          return prev;
+        }
+        return [...prev, uploadedAttachment];
+      });
+    },
+    onError: (error: any) => {
+      alert(error.response?.data?.error?.message ?? 'Tải tệp tin lên thất bại.');
+    }
+  });
+
+  // Hàm xử lý kiểm tra kích thước file phía Client (Normal Flow 2)
+  function handleChatFileChange(file?: File) {
+    if (!file) return;
+    // Kiểm tra quy định nghiệp vụ BR-FILE-002: File không vượt quá 10 MB
+    if (file.size > 10 * 1024 * 1024) {
+      alert('Dung lượng tệp đính kèm vượt quá giới hạn cho phép (Tối đa 10 MB).');
+      return;
+    }
+    uploadChatFile.mutate(file);
+    if (chatFileInputRef.current) chatFileInputRef.current.value = ''; // Reset input
+  }
 
   const editMessage = useMutation({
     mutationFn: ({ messageId, content }: { messageId: string, content: string }) =>
@@ -745,10 +782,15 @@ export function ChatShell() {
   function submitMessage(event: FormEvent) {
     event.preventDefault();
     const content = message.trim();
-    if (content && channelId) {
-      stopTyping(channelId);
+    // Chấp nhận gửi nếu có nội dung chữ HOẶC có file đính kèm
+    if ((content || chatAttachments.length > 0) && channelId) {
       setMessageSearch('');
-      sendMessage.mutate({ channelId, content, clientRequestId: crypto.randomUUID() });
+      sendMessage.mutate({
+        channelId,
+        content,
+        clientRequestId: crypto.randomUUID(),
+        attachments: chatAttachments // <-- Gửi kèm danh sách metadata tệp tin lên Backend
+      });
     }
   }
 
@@ -1143,15 +1185,75 @@ export function ChatShell() {
           </div>
 
           <form className="composer" onSubmit={submitMessage}>
-            <div className="composer-input">
-              <input
+            <div style={{ display: 'flex', flexDirection: 'column', width: '100%' }}>
+
+              {/* Vùng hiển thị hàng đợi các tệp đã upload thành công nhưng chưa bấm nút gửi */}
+              {chatAttachments.length > 0 && (
+                <div className="attachments" style={{ marginBottom: '8px', padding: '0 8px' }}>
+                  {chatAttachments.map((file, idx) => (
+                    <span
+                      key={file.storageKey || idx}
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '8px',
+                        background: 'var(--tertiary)',
+                        padding: '4px 8px',
+                        borderRadius: '4px',
+                        fontSize: '13px'
+                      }}
+                    >
+                      <span style={{ maxWidth: '160px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--white)' }}>
+                        {file.originalName}
+                      </span>
+                      {/* Nút hỗ trợ người dùng xóa tệp đính kèm nếu đổi ý */}
+                      <button
+                        type="button"
+                        onClick={() => setChatAttachments(prev => prev.filter((_, i) => i !== idx))}
+                        style={{ border: 0, background: 'transparent', color: '#fa777c', padding: 0, display: 'flex' }}
+                      >
+                        <X size={14} />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+
+              <div className="composer-input" style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                {/* Input chọn tệp ẩn từ hệ thống */}
+                <input
+                  ref={chatFileInputRef}
+                  type="file"
+                  style={{ display: 'none' }}
+                  onChange={(event) => handleChatFileChange(event.currentTarget.files?.[0])}
+                />
+
+                {/* Nút Plus hình tròn kích hoạt chọn file */}
+                <button
+                  type="button"
+                  title="Upload file"
+                  onClick={() => chatFileInputRef.current?.click()}
+                  disabled={uploadChatFile.isPending}
+                  style={{ border: 0, background: 'transparent', color: 'var(--gray)', padding: 0, display: 'flex', alignItems: 'center' }}
+                >
+                  <Plus size={20} style={{ background: 'var(--primary)', borderRadius: '50%', padding: '2px', color: 'var(--white)' }} />
+                </button>
+
+                <input
                   value={message}
-                  onBlur={() => stopTyping(channelId)}
-                  onChange={(event) => handleComposerChange(event.target.value)}
-                  placeholder={`Message #${activeChannel?.name ?? ''}`}
-              />
+                  onChange={(event) => setMessage(event.target.value)}
+                  placeholder={uploadChatFile.isPending ? "Đang tải tệp đính kèm lên hệ thống..." : `Message #${activeChannel?.name ?? ''}`}
+                  disabled={uploadChatFile.isPending}
+                />
+              </div>
             </div>
-            <button title="Send" type="submit" disabled={!message.trim()}>
+
+            {/* Mở khóa nút gửi nếu có chữ HOẶC có file trong hàng đợi */}
+            <button
+              title="Send"
+              type="submit"
+              disabled={(!message.trim() && chatAttachments.length === 0) || uploadChatFile.isPending}
+            >
               <Send size={20} />
             </button>
           </form>
