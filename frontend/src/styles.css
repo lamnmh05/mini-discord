@@ -1358,3 +1358,42 @@ input:focus {
   border-radius: 16px !important;
 }
 
+/* Khung chứa Icon Server bên ngoài */
+.server-edit-avatar {
+  width: 64px !important;
+  height: 64px !important;
+  min-width: 64px !important;
+  min-height: 64px !important;
+  max-width: 64px !important;
+  max-height: 64px !important;
+  flex-shrink: 0 !important;
+  aspect-ratio: 1 / 1 !important;
+
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  overflow: hidden !important;
+  border-radius: 16px !important; /* Bo góc dạng vuông Discord */
+  align-self: center !important;
+
+  background: var(--secondary) !important;
+  color: var(--white) !important;
+  font-weight: bold;
+}
+
+/* Áp dụng mẹo khóa cứng kích thước trực tiếp lên thẻ IMG giống User Account */
+.server-edit-avatar img {
+  display: block !important;
+  width: 64px !important;
+  height: 64px !important;
+  min-width: 64px !important;
+  min-height: 64px !important;
+  max-width: 64px !important;
+  max-height: 64px !important;
+
+  object-fit: cover !important;
+  object-position: center !important;
+  border-radius: 16px !important; /* Ép thẻ ảnh phải bo góc 16px giống khung ngoài */
+  margin: 0 !important;
+  padding: 0 !important;
+}

@@ -822,7 +822,7 @@ export function ChatShell() {
                     <h2>Server settings</h2>
 
                     <div className="profile-card">
-                      <div className="profile-avatar">
+                      <div className="server-edit-avatar">
                         {serverIconUrl.trim() ? <img src={serverIconUrl.trim()} alt="" /> : initialOf(serverName || activeServer?.name)}
                       </div>
                       <div>
@@ -885,7 +885,7 @@ export function ChatShell() {
                     <form onSubmit={(event) => { event.preventDefault(); if (profileUsername.trim()) updateProfile.mutate(); }}>
                       <h2>Profile</h2>
                       <div className="profile-card">
-                        <div className="profile-avatar">
+                        <div className="server-edit-avatar">
                           {profileAvatarUrl.trim() ? <img src={profileAvatarUrl.trim()} alt="" /> : initialOf(profileUsername || auth.user?.username)}
                         </div>
                         <div>
