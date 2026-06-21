@@ -72,10 +72,12 @@ public class AuthService {
     @Transactional
     public IssuedAuth login(LoginRequest request, HttpServletRequest httpRequest) {
         UserDocument user = userRepository.findByEmailKey(Keys.normalize(request.email()))
-                .orElseThrow(this::loginFailed);
+                .orElseThrow(() -> new ApiException(ErrorCode.UNAUTHENTICATED, "Tài khoản chưa tồn tại."));
+
         if (user.accountStatus != AccountStatus.ACTIVE || !passwordEncoder.matches(request.password(), user.passwordHash)) {
             throw loginFailed();
         }
+
         return issue(user, httpRequest, Optional.empty());
     }
 
