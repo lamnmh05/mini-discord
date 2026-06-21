@@ -74,6 +74,7 @@ export function ChatShell() {
   const [serverName, setServerName] = useState('');
   const [channelName, setChannelName] = useState('');
   const [joinCode, setJoinCode] = useState('');
+  const [joinError, setJoinError] = useState('');
   const [inviteeUsername, setInviteeUsername] = useState('');
   const [inviteMaxUses, setInviteMaxUses] = useState('');
   const [profileUsername, setProfileUsername] = useState('');
@@ -150,11 +151,11 @@ export function ChatShell() {
   const searchMessages = useQuery({
     queryKey: ['message-search', serverId, channelId, messageSearch],
     queryFn: () =>
-      unwrap(
-        api.get<ApiResponse<Message[]>>(`/servers/${serverId}/messages/search`, {
-          params: { q: messageSearch.trim(), channelId }
-        })
-      ),
+        unwrap(
+            api.get<ApiResponse<Message[]>>(`/servers/${serverId}/messages/search`, {
+              params: { q: messageSearch.trim(), channelId }
+            })
+        ),
     enabled: searchEnabled
   });
 
@@ -180,30 +181,30 @@ export function ChatShell() {
     const disposers: Array<() => void> = [];
     const subscribe = () => {
       disposers.push(
-        client.subscribe(`/topic/channels/${channelId}/messages`, (frame) => {
-          const event = JSON.parse(frame.body) as WebSocketEvent<Message | { messageId: string }>;
-          const eventChannelId = event.channelId ?? channelId;
-          if (event.eventType === 'MESSAGE_CREATED') {
-            queryClient.setQueryData<Message[]>(['messages', eventChannelId], (old) => upsertMessage(old, event.data as Message));
-          } else if (event.eventType === 'MESSAGE_UPDATED' || event.eventType === 'REACTION_UPDATED') {
-            queryClient.setQueryData<Message[]>(['messages', eventChannelId], (old) => upsertMessage(old, event.data as Message));
-          } else if (event.eventType === 'MESSAGE_DELETED') {
-            queryClient.setQueryData<Message[]>(['messages', eventChannelId], (old) => removeMessage(old, (event.data as { messageId: string }).messageId));
-          } else {
-            queryClient.invalidateQueries({ queryKey: ['messages', eventChannelId] });
-          }
-        }).unsubscribe
+          client.subscribe(`/topic/channels/${channelId}/messages`, (frame) => {
+            const event = JSON.parse(frame.body) as WebSocketEvent<Message | { messageId: string }>;
+            const eventChannelId = event.channelId ?? channelId;
+            if (event.eventType === 'MESSAGE_CREATED') {
+              queryClient.setQueryData<Message[]>(['messages', eventChannelId], (old) => upsertMessage(old, event.data as Message));
+            } else if (event.eventType === 'MESSAGE_UPDATED' || event.eventType === 'REACTION_UPDATED') {
+              queryClient.setQueryData<Message[]>(['messages', eventChannelId], (old) => upsertMessage(old, event.data as Message));
+            } else if (event.eventType === 'MESSAGE_DELETED') {
+              queryClient.setQueryData<Message[]>(['messages', eventChannelId], (old) => removeMessage(old, (event.data as { messageId: string }).messageId));
+            } else {
+              queryClient.invalidateQueries({ queryKey: ['messages', eventChannelId] });
+            }
+          }).unsubscribe
       );
       disposers.push(
-        client.subscribe(`/topic/servers/${serverId}/presence`, () => {
-          queryClient.invalidateQueries({ queryKey: ['members', serverId] });
-        }).unsubscribe
+          client.subscribe(`/topic/servers/${serverId}/presence`, () => {
+            queryClient.invalidateQueries({ queryKey: ['members', serverId] });
+          }).unsubscribe
       );
       disposers.push(
-        client.subscribe('/user/queue/notifications', () => {
-          queryClient.invalidateQueries({ queryKey: ['notifications'] });
-          queryClient.invalidateQueries({ queryKey: ['received-invites'] });
-        }).unsubscribe
+          client.subscribe('/user/queue/notifications', () => {
+            queryClient.invalidateQueries({ queryKey: ['notifications'] });
+            queryClient.invalidateQueries({ queryKey: ['received-invites'] });
+          }).unsubscribe
       );
     };
     if (client.connected) {
@@ -224,6 +225,21 @@ export function ChatShell() {
       setChannelId(server.defaultChannelId);
     }
   });
+
+  const leaveServer = useMutation({
+    mutationFn: () => unwrap(api.post<ApiResponse<{ message: string }>>(`/servers/${serverId}/leave`)),
+    onSuccess: () => {
+      setServerId(undefined);
+      setChannelId(undefined);
+      setServerMenuOpen(false);
+      queryClient.invalidateQueries({ queryKey: ['servers'] });
+    },
+    onError: (error: any) => {
+      alert(error.response?.data?.error?.message ?? 'Không thể rời server.');
+    }
+  });
+
+
 
   const createChannel = useMutation({
     mutationFn: () => unwrap(api.post<ApiResponse<Channel>>(`/servers/${serverId}/channels`, { name: channelName.trim() })),
@@ -257,13 +273,13 @@ export function ChatShell() {
 
   const sendMessage = useMutation({
     mutationFn: ({ channelId, content, clientRequestId }: SendMessageVariables) =>
-      unwrap(
-        api.post<ApiResponse<Message>>(`/channels/${channelId}/messages`, {
-          content,
-          attachments: [],
-          clientRequestId
-        })
-      ),
+        unwrap(
+            api.post<ApiResponse<Message>>(`/channels/${channelId}/messages`, {
+              content,
+              attachments: [],
+              clientRequestId
+            })
+        ),
     onMutate: () => setMessage(''),
     onSuccess: (created, variables) => {
       queryClient.setQueryData<Message[]>(['messages', variables.channelId], (old) => upsertMessage(old, created));
@@ -272,12 +288,28 @@ export function ChatShell() {
 
   const joinByCode = useMutation({
     mutationFn: () => unwrap(api.post<ApiResponse<Server>>(`/invite-codes/${joinCode.trim()}/join`)),
+    onMutate: () => setJoinError(''),
     onSuccess: (server) => {
       setJoinCode('');
+      setJoinError('');
       setModal(null);
       queryClient.invalidateQueries({ queryKey: ['servers'] });
       setServerId(server.id);
       setChannelId(server.defaultChannelId);
+    },
+    onError: (error: any) => {
+      const errorCode = error?.response?.data?.error?.code;
+      const errorMessage = error?.response?.data?.error?.message;
+
+      if (errorCode === 'DUPLICATE_RESOURCE') {
+        setJoinError('Bạn đã là thành viên của server này.');
+      }
+      else if (errorMessage) {
+        setJoinError(errorMessage);
+      }
+      else {
+        setJoinError('Không thể tham gia server. Mã mời không hợp lệ.');
+      }
     }
   });
 
@@ -291,11 +323,11 @@ export function ChatShell() {
 
   const createInviteCode = useMutation({
     mutationFn: () =>
-      unwrap(
-        api.post<ApiResponse<InviteCode>>(`/servers/${serverId}/invite-codes`, {
-          maxUses: inviteMaxUses.trim() ? Number(inviteMaxUses) : undefined
-        })
-      ),
+        unwrap(
+            api.post<ApiResponse<InviteCode>>(`/servers/${serverId}/invite-codes`, {
+              maxUses: inviteMaxUses.trim() ? Number(inviteMaxUses) : undefined
+            })
+        ),
     onSuccess: () => {
       setInviteMaxUses('');
       queryClient.invalidateQueries({ queryKey: ['invite-codes', serverId] });
@@ -324,14 +356,14 @@ export function ChatShell() {
 
   const updateProfile = useMutation({
     mutationFn: () =>
-      unwrap(
-        api.patch<ApiResponse<CurrentUser>>('/users/me', {
-          username: profileUsername.trim(),
-          displayName: profileDisplayName.trim(),
-          customStatus: profileCustomStatus.trim(),
-          avatarUrl: profileAvatarUrl.trim()
-        })
-      ),
+        unwrap(
+            api.patch<ApiResponse<CurrentUser>>('/users/me', {
+              username: profileUsername.trim(),
+              displayName: profileDisplayName.trim(),
+              customStatus: profileCustomStatus.trim(),
+              avatarUrl: profileAvatarUrl.trim()
+            })
+        ),
     onMutate: () => setProfileError(''),
     onSuccess: (user) => {
       if (auth.accessToken) {
@@ -441,87 +473,102 @@ export function ChatShell() {
   const isOwner = activeServer?.currentRole === 'OWNER';
 
   return (
-    <main className="discord-shell">
-      <aside className="server-rail">
-        <button className="server-pill home" title="Profile" type="button" onClick={() => openModal('profile')}>
-          {auth.user?.avatarUrl ? <img src={auth.user.avatarUrl} alt="" /> : initialOf(auth.user?.username)}
-        </button>
-        <span className="server-divider" />
-
-        <div className="server-list">
-          {servers.data?.map((server) => (
-            <button
-              key={server.id}
-              className={`server-pill ${server.id === serverId ? 'active' : ''}`}
-              title={server.name}
-              type="button"
-              onClick={() => selectServer(server)}
-            >
-              {server.iconUrl ? <img src={server.iconUrl} alt="" /> : initialOf(server.name)}
-            </button>
-          ))}
-        </div>
-
-        <button className="server-pill action" title="Create server" type="button" onClick={() => openModal('create-server')}>
-          <Plus size={24} />
-        </button>
-        <button className="server-pill action" title="Join server" type="button" onClick={() => openModal('join-server')}>
-          <UserPlus size={22} />
-        </button>
-      </aside>
-
-      <aside className="channel-column">
-        <header className="server-bar">
-          <button className="server-name-button" type="button" onClick={() => setServerMenuOpen((open) => !open)}>
-            <span>{activeServer?.name ?? 'Mini Discord'}</span>
-            <ChevronDown size={20} />
+      <main className="discord-shell">
+        <aside className="server-rail">
+          <button className="server-pill home" title="Profile" type="button" onClick={() => openModal('profile')}>
+            {auth.user?.avatarUrl ? <img src={auth.user.avatarUrl} alt="" /> : initialOf(auth.user?.username)}
           </button>
+          <span className="server-divider" />
 
-          {serverMenuOpen && (
-            <div className="server-menu">
-              <button type="button" onClick={() => openModal('create-server')}>
-                Create server
-              </button>
-              <button type="button" onClick={() => openModal('join-server')}>
-                Join by invite code
-              </button>
-              {isOwner && (
-                <>
-                  <button type="button" onClick={() => openModal('create-channel')}>
-                    Create channel
-                  </button>
-                  <button type="button" onClick={() => openModal('invite-code')}>
-                    Invite codes
-                  </button>
-                  <button type="button" onClick={() => openModal('invite-user')}>
-                    Direct invite
-                  </button>
-                </>
-              )}
-            </div>
-          )}
-        </header>
-
-        <nav className="channel-list">
-          <div className="channel-category">
-            <span>Text channels</span>
-            {isOwner && (
-              <button title="Create channel" type="button" onClick={() => openModal('create-channel')}>
-                <Plus size={18} />
-              </button>
-            )}
+          <div className="server-list">
+            {servers.data?.map((server) => (
+                <button
+                    key={server.id}
+                    className={`server-pill ${server.id === serverId ? 'active' : ''}`}
+                    title={server.name}
+                    type="button"
+                    onClick={() => selectServer(server)}
+                >
+                  {server.iconUrl ? <img src={server.iconUrl} alt="" /> : initialOf(server.name)}
+                </button>
+            ))}
           </div>
 
-          {channels.data?.map((channel) => (
-            <div key={channel.id} className={`channel-row ${channel.id === channelId ? 'active' : ''}`}>
-              <button className="channel-select" type="button" onClick={() => setChannelId(channel.id)}>
+          <button className="server-pill action" title="Create server" type="button" onClick={() => openModal('create-server')}>
+            <Plus size={24} />
+          </button>
+          <button className="server-pill action" title="Join server" type="button" onClick={() => openModal('join-server')}>
+            <UserPlus size={22} />
+          </button>
+        </aside>
+
+        <aside className="channel-column">
+          <header className="server-bar">
+            <button className="server-name-button" type="button" onClick={() => setServerMenuOpen((open) => !open)}>
+              <span>{activeServer?.name ?? 'Mini Discord'}</span>
+              <ChevronDown size={20} />
+            </button>
+
+            {serverMenuOpen && (
+                <div className="server-menu">
+                  <button type="button" onClick={() => openModal('create-server')}>
+                    Create server
+                  </button>
+                  <button type="button" onClick={() => openModal('join-server')}>
+                    Join by invite code
+                  </button>
+                  {serverId && (
+                      <button
+                          type="button"
+                          style={{ color: '#fa777c' }}
+                          onClick={() => {
+                            if (window.confirm(`Bạn có chắc chắn muốn rời khỏi server ${activeServer?.name} không?`)) {
+                              leaveServer.mutate();
+                            }
+                          }}
+                          disabled={leaveServer.isPending}
+                      >
+                        {leaveServer.isPending ? 'Đang xử lý...' : 'Leave server'}
+                      </button>
+                  )}
+                  {isOwner && (
+                      <>
+                        <button type="button" onClick={() => openModal('create-channel')}>
+                          Create channel
+                        </button>
+                        <button type="button" onClick={() => openModal('invite-code')}>
+                          Invite codes
+                        </button>
+                        <button type="button" onClick={() => openModal('invite-user')}>
+                          Direct invite
+                        </button>
+
+                      </>
+                  )}
+                </div>
+            )}
+          </header>
+
+          <nav className="channel-list">
+            <div className="channel-category">
+              <span>Text channels</span>
+              {isOwner && (
+                  <button title="Create channel" type="button" onClick={() => openModal('create-channel')}>
+                    <Plus size={18} />
+                  </button>
+              )}
+            </div>
+
+            {channels.data?.map((channel) => (
+                <div key={channel.id} className={`channel-row ${channel.id === channelId ? 'active' : ''}`}>
+                  <button className="channel-select" type="button" onClick={() => setChannelId(channel.id)}>
                 <span className="channel-main">
                   <Hash size={20} />
                   <span>{channel.name}</span>
                 </span>
-              </button>
-              {isOwner && (
-                <span className="channel-tools">
+                  </button>
+                  {isOwner && (
+                      <span className="channel-tools">
                   <button title="Direct invite" type="button" onClick={() => openModal('invite-user', channel)}>
                     <UserPlus size={16} />
                   </button>
@@ -529,298 +576,302 @@ export function ChatShell() {
                     <Settings size={16} />
                   </button>
                 </span>
-              )}
-            </div>
-          ))}
-        </nav>
-
-        <footer className="account-panel">
-          <button className="account-user" type="button" onClick={() => openModal('profile')}>
-            <div className="small-avatar">{auth.user?.avatarUrl ? <img src={auth.user.avatarUrl} alt="" /> : initialOf(auth.user?.username)}</div>
-            <div>
-              <strong>{auth.user?.displayName ?? auth.user?.username}</strong>
-              <span>{auth.user?.customStatus || (auth.user?.username ? `@${auth.user.username}` : 'online')}</span>
-            </div>
-          </button>
-          <button title="Logout" type="button" onClick={logout}>
-            <LogOut size={18} />
-          </button>
-        </footer>
-      </aside>
-
-      <section className="chat-panel">
-        <header className="channel-header">
-          <div className="channel-title">
-            <Hash size={23} />
-            <strong>{activeChannel?.name ?? 'general'}</strong>
-            {activeServer && (
-              <>
-                <span className="title-separator" />
-                <span>{activeServer.name}</span>
-              </>
-            )}
-          </div>
-
-          <div className="header-actions">
-            <button className="header-icon" title="Notifications" type="button" onClick={() => setNotificationOpen((open) => !open)}>
-              <Bell size={20} />
-              {(notifications.data?.length ?? 0) + (receivedInvites.data?.length ?? 0) > 0 && (
-                <span className="badge">{(notifications.data?.length ?? 0) + (receivedInvites.data?.length ?? 0)}</span>
-              )}
-            </button>
-            <Users size={20} />
-            <label className="message-search">
-              <input value={messageSearch} onChange={(event) => setMessageSearch(event.target.value)} placeholder="Search" />
-              <Search size={16} />
-            </label>
-
-            {notificationOpen && (
-              <div className="notification-popover">
-                <div className="popover-head">
-                  <strong>Notifications</strong>
-                  <button type="button" onClick={() => markAllRead.mutate()} disabled={!notifications.data?.length}>
-                    Mark read
-                  </button>
-                </div>
-                {notifications.data?.length ? (
-                  notifications.data.map((item) => (
-                    <article key={item.id} className="notification-item">
-                      <strong>{item.title}</strong>
-                      <p>{item.body}</p>
-                    </article>
-                  ))
-                ) : (
-                  <p className="empty-copy">No unread notifications</p>
-                )}
-
-                {(receivedInvites.data?.length ?? 0) > 0 && (
-                  <>
-                    <span className="popover-label">Invites</span>
-                    {receivedInvites.data?.map((invite) => (
-                      <article key={invite.id} className="notification-item invite-item">
-                        <strong>{invite.serverName}</strong>
-                        <p>From {invite.inviterUsername}</p>
-                        <div>
-                          <button type="button" onClick={() => acceptInvite.mutate(invite.id)}>
-                            <Check size={15} /> Accept
-                          </button>
-                          <button type="button" onClick={() => rejectInvite.mutate(invite.id)}>
-                            <X size={15} /> Reject
-                          </button>
-                        </div>
-                      </article>
-                    ))}
-                  </>
-                )}
-              </div>
-            )}
-          </div>
-        </header>
-
-        <div className="message-list" ref={messageListRef}>
-          {!messages.isLoading && !searchEnabled && renderedMessages.length === 0 && <div className="message-empty">No messages yet</div>}
-          {!searchEnabled && messages.isError && <div className="message-empty error">Could not load messages</div>}
-          {renderedMessages.map((item) => (
-            <article className="message-row" key={item.id}>
-              <div className="message-avatar">
-                {item.senderSnapshot?.avatarUrl ? <img src={item.senderSnapshot.avatarUrl} alt="" /> : initialOf(item.senderSnapshot?.username)}
-              </div>
-              <div className="message-body">
-                <div className="message-meta">
-                  <strong>{item.senderSnapshot?.displayName ?? item.senderSnapshot?.username ?? 'Unknown user'}</strong>
-                  <time>{formatTime(item.createdAt)}</time>
-                  {item.editedAt && <span>(edited)</span>}
-                </div>
-                {item.content && <p>{item.content}</p>}
-                {(item.attachments ?? []).length > 0 && (
-                  <div className="attachments">
-                    {(item.attachments ?? []).map((file) => (
-                      <a key={file.storageKey} href={file.fileUrl} target="_blank" rel="noreferrer">
-                        {file.originalName}
-                      </a>
-                    ))}
-                  </div>
-                )}
-                {(item.reactions ?? []).length > 0 && (
-                  <div className="reaction-list">
-                    {(item.reactions ?? []).map((reaction) => (
-                      <span key={reaction.emoji} className="reaction-chip">
-                        {reaction.emoji} {reaction.userIds.length}
-                      </span>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </article>
-          ))}
-        </div>
-
-        <form className="composer" onSubmit={submitMessage}>
-          <div className="composer-input">
-            <input value={message} onChange={(event) => setMessage(event.target.value)} placeholder={`Message #${activeChannel?.name ?? ''}`} />
-          </div>
-          <button title="Send" type="submit" disabled={!message.trim()}>
-            <Send size={20} />
-          </button>
-        </form>
-      </section>
-
-      <aside className="member-column">
-        <MemberGroup title={`Online - ${onlineMembers.length}`} members={onlineMembers} />
-        <MemberGroup title={`Offline - ${offlineMembers.length}`} members={offlineMembers} offline />
-      </aside>
-
-      {modal && (
-        <div className="modal-backdrop" role="presentation" onMouseDown={closeModal}>
-          <div className="modal" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}>
-            <button className="modal-close" type="button" onClick={closeModal}>
-              <X size={20} />
-            </button>
-            {modal === 'create-server' && (
-              <form onSubmit={(event) => { event.preventDefault(); if (serverName.trim()) createServer.mutate(); }}>
-                <h2>Create server</h2>
-                <input value={serverName} onChange={(event) => setServerName(event.target.value)} placeholder="Server name" autoFocus />
-                <button className="modal-primary" disabled={!serverName.trim() || createServer.isPending}>Create</button>
-              </form>
-            )}
-
-            {modal === 'profile' && (
-              <form onSubmit={(event) => { event.preventDefault(); if (profileUsername.trim()) updateProfile.mutate(); }}>
-                <h2>Profile</h2>
-                <div className="profile-card">
-                  <div className="profile-avatar">
-                    {profileAvatarUrl.trim() ? <img src={profileAvatarUrl.trim()} alt="" /> : initialOf(profileUsername || auth.user?.username)}
-                  </div>
-                  <div>
-                    <strong>{profileDisplayName.trim() || profileUsername || auth.user?.username}</strong>
-                    <span>{profileCustomStatus.trim() || auth.user?.email}</span>
-                  </div>
-                </div>
-                <label>
-                  Username
-                  <input
-                    value={profileUsername}
-                    onChange={(event) => setProfileUsername(event.target.value)}
-                    minLength={3}
-                    maxLength={32}
-                    pattern="^[a-zA-Z0-9_.-]+$"
-                    required
-                    autoFocus
-                  />
-                </label>
-                <label>
-                  Display name
-                  <input value={profileDisplayName} onChange={(event) => setProfileDisplayName(event.target.value)} maxLength={80} placeholder="Display name" />
-                </label>
-                <label>
-                  Custom status
-                  <input value={profileCustomStatus} onChange={(event) => setProfileCustomStatus(event.target.value)} maxLength={180} placeholder="Status" />
-                </label>
-                <label>
-                  Avatar URL
-                  <input value={profileAvatarUrl} onChange={(event) => setProfileAvatarUrl(event.target.value)} placeholder="https://..." />
-                </label>
-                <div className="avatar-upload-row">
-                  <input
-                    ref={avatarInputRef}
-                    type="file"
-                    accept="image/png,image/jpeg,image/gif,image/webp"
-                    onChange={(event) => uploadAvatarFile(event.currentTarget.files?.[0])}
-                  />
-                  <button className="secondary-button" type="button" onClick={() => avatarInputRef.current?.click()} disabled={uploadAvatar.isPending}>
-                    {uploadAvatar.isPending ? 'Uploading' : 'Upload image'}
-                  </button>
-                  <span>{uploadAvatar.data?.originalName ?? 'PNG, JPG, GIF, WebP up to 10 MB'}</span>
-                </div>
-                {avatarUploadError && <p className="form-error">{avatarUploadError}</p>}
-                <div className="profile-meta">
-                  <span>Email</span>
-                  <strong>{auth.user?.email}</strong>
-                  <span>Account</span>
-                  <strong>{auth.user?.accountStatus}</strong>
-                </div>
-                {profileError && <p className="form-error">{profileError}</p>}
-                <button className="modal-primary" disabled={!profileUsername.trim() || updateProfile.isPending || currentProfile.isLoading}>
-                  {updateProfile.isPending ? 'Saving' : 'Save changes'}
-                </button>
-              </form>
-            )}
-
-            {modal === 'join-server' && (
-              <form onSubmit={(event) => { event.preventDefault(); if (joinCode.trim()) joinByCode.mutate(); }}>
-                <h2>Join server</h2>
-                <input value={joinCode} onChange={(event) => setJoinCode(event.target.value)} placeholder="Invite code" autoFocus />
-                <button className="modal-primary" disabled={!joinCode.trim() || joinByCode.isPending}>Join</button>
-              </form>
-            )}
-
-            {modal === 'create-channel' && (
-              <form onSubmit={(event) => { event.preventDefault(); if (channelName.trim()) createChannel.mutate(); }}>
-                <h2>Create text channel</h2>
-                <input value={channelName} onChange={(event) => setChannelName(event.target.value)} placeholder="channel-name" autoFocus />
-                <button className="modal-primary" disabled={!channelName.trim() || createChannel.isPending}>Create</button>
-              </form>
-            )}
-
-            {modal === 'invite-user' && (
-              <form onSubmit={(event) => { event.preventDefault(); if (inviteeUsername.trim()) directInvite.mutate(); }}>
-                <h2>Direct invite</h2>
-                <input value={inviteeUsername} onChange={(event) => setInviteeUsername(event.target.value)} placeholder="Username" autoFocus />
-                <button className="modal-primary" disabled={!inviteeUsername.trim() || directInvite.isPending}>Invite</button>
-              </form>
-            )}
-
-            {modal === 'invite-code' && (
-              <form onSubmit={(event) => { event.preventDefault(); createInviteCode.mutate(); }}>
-                <h2>Invite codes</h2>
-                <div className="inline-form">
-                  <input value={inviteMaxUses} onChange={(event) => setInviteMaxUses(event.target.value)} placeholder="Max uses (optional)" inputMode="numeric" />
-                  <button className="modal-primary" disabled={createInviteCode.isPending}>Create</button>
-                </div>
-                <div className="invite-code-list">
-                  {inviteCodes.data?.map((code) => (
-                    <button key={code.id} type="button" onClick={() => navigator.clipboard?.writeText(code.code)}>
-                      <span>{code.code}</span>
-                      <small>{code.useCount}{code.maxUses ? `/${code.maxUses}` : ''} uses</small>
-                      <Clipboard size={15} />
-                    </button>
-                  ))}
-                </div>
-              </form>
-            )}
-
-            {modal === 'edit-channel' && (
-              <form onSubmit={(event) => { event.preventDefault(); if (channelName.trim()) updateChannel.mutate(); }}>
-                <h2>Channel settings</h2>
-                <input value={channelName} onChange={(event) => setChannelName(event.target.value)} placeholder="channel-name" autoFocus />
-                <div className="modal-actions">
-                  <button className="modal-primary" disabled={!channelName.trim() || updateChannel.isPending}>Save</button>
-                  {!selectedChannel?.defaultChannel && (
-                    <button className="danger-button" type="button" onClick={() => deleteChannel.mutate()} disabled={deleteChannel.isPending}>
-                      <Trash2 size={16} /> Delete
-                    </button>
                   )}
                 </div>
-              </form>
-            )}
+            ))}
+          </nav>
+
+          <footer className="account-panel">
+            <button className="account-user" type="button" onClick={() => openModal('profile')}>
+              <div className="small-avatar">{auth.user?.avatarUrl ? <img src={auth.user.avatarUrl} alt="" /> : initialOf(auth.user?.username)}</div>
+              <div>
+                <strong>{auth.user?.displayName ?? auth.user?.username}</strong>
+                <span>{auth.user?.customStatus || (auth.user?.username ? `@${auth.user.username}` : 'online')}</span>
+              </div>
+            </button>
+            <button title="Logout" type="button" onClick={logout}>
+              <LogOut size={18} />
+            </button>
+          </footer>
+        </aside>
+
+        <section className="chat-panel">
+          <header className="channel-header">
+            <div className="channel-title">
+              <Hash size={23} />
+              <strong>{activeChannel?.name ?? 'general'}</strong>
+              {activeServer && (
+                  <>
+                    <span className="title-separator" />
+                    <span>{activeServer.name}</span>
+                  </>
+              )}
+            </div>
+
+            <div className="header-actions">
+              <button className="header-icon" title="Notifications" type="button" onClick={() => setNotificationOpen((open) => !open)}>
+                <Bell size={20} />
+                {(notifications.data?.length ?? 0) + (receivedInvites.data?.length ?? 0) > 0 && (
+                    <span className="badge">{(notifications.data?.length ?? 0) + (receivedInvites.data?.length ?? 0)}</span>
+                )}
+              </button>
+              <Users size={20} />
+              <label className="message-search">
+                <input value={messageSearch} onChange={(event) => setMessageSearch(event.target.value)} placeholder="Search" />
+                <Search size={16} />
+              </label>
+
+              {notificationOpen && (
+                  <div className="notification-popover">
+                    <div className="popover-head">
+                      <strong>Notifications</strong>
+                      <button type="button" onClick={() => markAllRead.mutate()} disabled={!notifications.data?.length}>
+                        Mark read
+                      </button>
+                    </div>
+                    {notifications.data?.length ? (
+                        notifications.data.map((item) => (
+                            <article key={item.id} className="notification-item">
+                              <strong>{item.title}</strong>
+                              <p>{item.body}</p>
+                            </article>
+                        ))
+                    ) : (
+                        <p className="empty-copy">No unread notifications</p>
+                    )}
+
+                    {(receivedInvites.data?.length ?? 0) > 0 && (
+                        <>
+                          <span className="popover-label">Invites</span>
+                          {receivedInvites.data?.map((invite) => (
+                              <article key={invite.id} className="notification-item invite-item">
+                                <strong>{invite.serverName}</strong>
+                                <p>From {invite.inviterUsername}</p>
+                                <div>
+                                  <button type="button" onClick={() => acceptInvite.mutate(invite.id)}>
+                                    <Check size={15} /> Accept
+                                  </button>
+                                  <button type="button" onClick={() => rejectInvite.mutate(invite.id)}>
+                                    <X size={15} /> Reject
+                                  </button>
+                                </div>
+                              </article>
+                          ))}
+                        </>
+                    )}
+                  </div>
+              )}
+            </div>
+          </header>
+
+          <div className="message-list" ref={messageListRef}>
+            {!messages.isLoading && !searchEnabled && renderedMessages.length === 0 && <div className="message-empty">No messages yet</div>}
+            {!searchEnabled && messages.isError && <div className="message-empty error">Could not load messages</div>}
+            {renderedMessages.map((item) => (
+                <article className="message-row" key={item.id}>
+                  <div className="message-avatar">
+                    {item.senderSnapshot?.avatarUrl ? <img src={item.senderSnapshot.avatarUrl} alt="" /> : initialOf(item.senderSnapshot?.username)}
+                  </div>
+                  <div className="message-body">
+                    <div className="message-meta">
+                      <strong>{item.senderSnapshot?.displayName ?? item.senderSnapshot?.username ?? 'Unknown user'}</strong>
+                      <time>{formatTime(item.createdAt)}</time>
+                      {item.editedAt && <span>(edited)</span>}
+                    </div>
+                    {item.content && <p>{item.content}</p>}
+                    {(item.attachments ?? []).length > 0 && (
+                        <div className="attachments">
+                          {(item.attachments ?? []).map((file) => (
+                              <a key={file.storageKey} href={file.fileUrl} target="_blank" rel="noreferrer">
+                                {file.originalName}
+                              </a>
+                          ))}
+                        </div>
+                    )}
+                    {(item.reactions ?? []).length > 0 && (
+                        <div className="reaction-list">
+                          {(item.reactions ?? []).map((reaction) => (
+                              <span key={reaction.emoji} className="reaction-chip">
+                        {reaction.emoji} {reaction.userIds.length}
+                      </span>
+                          ))}
+                        </div>
+                    )}
+                  </div>
+                </article>
+            ))}
           </div>
-        </div>
-      )}
-    </main>
+
+          <form className="composer" onSubmit={submitMessage}>
+            <div className="composer-input">
+              <input value={message} onChange={(event) => setMessage(event.target.value)} placeholder={`Message #${activeChannel?.name ?? ''}`} />
+            </div>
+            <button title="Send" type="submit" disabled={!message.trim()}>
+              <Send size={20} />
+            </button>
+          </form>
+        </section>
+
+        <aside className="member-column">
+          <MemberGroup title={`Online - ${onlineMembers.length}`} members={onlineMembers} />
+          <MemberGroup title={`Offline - ${offlineMembers.length}`} members={offlineMembers} offline />
+        </aside>
+
+        {modal && (
+            <div className="modal-backdrop" role="presentation" onMouseDown={closeModal}>
+              <div className="modal" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}>
+                <button className="modal-close" type="button" onClick={closeModal}>
+                  <X size={20} />
+                </button>
+                {modal === 'create-server' && (
+                    <form onSubmit={(event) => { event.preventDefault(); if (serverName.trim()) createServer.mutate(); }}>
+                      <h2>Create server</h2>
+                      <input value={serverName} onChange={(event) => setServerName(event.target.value)} placeholder="Server name" autoFocus />
+                      <button className="modal-primary" disabled={!serverName.trim() || createServer.isPending}>Create</button>
+                    </form>
+                )}
+
+                {modal === 'profile' && (
+                    <form onSubmit={(event) => { event.preventDefault(); if (profileUsername.trim()) updateProfile.mutate(); }}>
+                      <h2>Profile</h2>
+                      <div className="profile-card">
+                        <div className="profile-avatar">
+                          {profileAvatarUrl.trim() ? <img src={profileAvatarUrl.trim()} alt="" /> : initialOf(profileUsername || auth.user?.username)}
+                        </div>
+                        <div>
+                          <strong>{profileDisplayName.trim() || profileUsername || auth.user?.username}</strong>
+                          <span>{profileCustomStatus.trim() || auth.user?.email}</span>
+                        </div>
+                      </div>
+                      <label>
+                        Username
+                        <input
+                            value={profileUsername}
+                            onChange={(event) => setProfileUsername(event.target.value)}
+                            minLength={3}
+                            maxLength={32}
+                            pattern="^[a-zA-Z0-9_.-]+$"
+                            required
+                            autoFocus
+                        />
+                      </label>
+                      <label>
+                        Display name
+                        <input value={profileDisplayName} onChange={(event) => setProfileDisplayName(event.target.value)} maxLength={80} placeholder="Display name" />
+                      </label>
+                      <label>
+                        Custom status
+                        <input value={profileCustomStatus} onChange={(event) => setProfileCustomStatus(event.target.value)} maxLength={180} placeholder="Status" />
+                      </label>
+                      <label>
+                        Avatar URL
+                        <input value={profileAvatarUrl} onChange={(event) => setProfileAvatarUrl(event.target.value)} placeholder="https://..." />
+                      </label>
+                      <div className="avatar-upload-row">
+                        <input
+                            ref={avatarInputRef}
+                            type="file"
+                            accept="image/png,image/jpeg,image/gif,image/webp"
+                            onChange={(event) => uploadAvatarFile(event.currentTarget.files?.[0])}
+                        />
+                        <button className="secondary-button" type="button" onClick={() => avatarInputRef.current?.click()} disabled={uploadAvatar.isPending}>
+                          {uploadAvatar.isPending ? 'Uploading' : 'Upload image'}
+                        </button>
+                        <span>{uploadAvatar.data?.originalName ?? 'PNG, JPG, GIF, WebP up to 10 MB'}</span>
+                      </div>
+                      {avatarUploadError && <p className="form-error">{avatarUploadError}</p>}
+                      <div className="profile-meta">
+                        <span>Email</span>
+                        <strong>{auth.user?.email}</strong>
+                        <span>Account</span>
+                        <strong>{auth.user?.accountStatus}</strong>
+                      </div>
+                      {profileError && <p className="form-error">{profileError}</p>}
+                      <button className="modal-primary" disabled={!profileUsername.trim() || updateProfile.isPending || currentProfile.isLoading}>
+                        {updateProfile.isPending ? 'Saving' : 'Save changes'}
+                      </button>
+                    </form>
+                )}
+
+                {modal === 'join-server' && (
+                    <form onSubmit={(event) => { event.preventDefault(); if (joinCode.trim()) joinByCode.mutate(); }}>
+                      <h2>Join server</h2>
+                      <input value={joinCode} onChange={(event) => setJoinCode(event.target.value)} placeholder="Invite code" autoFocus />
+                      {joinError && <p className="form-error" style={{ color: '#fa777c', marginTop: '8px' }}>{joinError}</p>}
+
+                      <button className="modal-primary" disabled={!joinCode.trim() || joinByCode.isPending}>
+                        {joinByCode.isPending ? 'Đang vào...' : 'Join'}
+                      </button>
+                    </form>
+                )}
+
+                {modal === 'create-channel' && (
+                    <form onSubmit={(event) => { event.preventDefault(); if (channelName.trim()) createChannel.mutate(); }}>
+                      <h2>Create text channel</h2>
+                      <input value={channelName} onChange={(event) => setChannelName(event.target.value)} placeholder="channel-name" autoFocus />
+                      <button className="modal-primary" disabled={!channelName.trim() || createChannel.isPending}>Create</button>
+                    </form>
+                )}
+
+                {modal === 'invite-user' && (
+                    <form onSubmit={(event) => { event.preventDefault(); if (inviteeUsername.trim()) directInvite.mutate(); }}>
+                      <h2>Direct invite</h2>
+                      <input value={inviteeUsername} onChange={(event) => setInviteeUsername(event.target.value)} placeholder="Username" autoFocus />
+                      <button className="modal-primary" disabled={!inviteeUsername.trim() || directInvite.isPending}>Invite</button>
+                    </form>
+                )}
+
+                {modal === 'invite-code' && (
+                    <form onSubmit={(event) => { event.preventDefault(); createInviteCode.mutate(); }}>
+                      <h2>Invite codes</h2>
+                      <div className="inline-form">
+                        <input value={inviteMaxUses} onChange={(event) => setInviteMaxUses(event.target.value)} placeholder="Max uses (optional)" inputMode="numeric" />
+                        <button className="modal-primary" disabled={createInviteCode.isPending}>Create</button>
+                      </div>
+                      <div className="invite-code-list">
+                        {inviteCodes.data?.map((code) => (
+                            <button key={code.id} type="button" onClick={() => navigator.clipboard?.writeText(code.code)}>
+                              <span>{code.code}</span>
+                              <small>{code.useCount}{code.maxUses ? `/${code.maxUses}` : ''} uses</small>
+                              <Clipboard size={15} />
+                            </button>
+                        ))}
+                      </div>
+                    </form>
+                )}
+
+                {modal === 'edit-channel' && (
+                    <form onSubmit={(event) => { event.preventDefault(); if (channelName.trim()) updateChannel.mutate(); }}>
+                      <h2>Channel settings</h2>
+                      <input value={channelName} onChange={(event) => setChannelName(event.target.value)} placeholder="channel-name" autoFocus />
+                      <div className="modal-actions">
+                        <button className="modal-primary" disabled={!channelName.trim() || updateChannel.isPending}>Save</button>
+                        {!selectedChannel?.defaultChannel && (
+                            <button className="danger-button" type="button" onClick={() => deleteChannel.mutate()} disabled={deleteChannel.isPending}>
+                              <Trash2 size={16} /> Delete
+                            </button>
+                        )}
+                      </div>
+                    </form>
+                )}
+              </div>
+            </div>
+        )}
+      </main>
   );
 }
 
 function MemberGroup({ title, members, offline }: { title: string; members: Member[]; offline?: boolean }) {
   return (
-    <section className="member-group">
-      <span>{title}</span>
-      {members.map((member) => (
-        <div className={`member-row ${offline ? 'offline' : ''}`} key={member.userId}>
-          <div className="small-avatar">{member.avatarUrl ? <img src={member.avatarUrl} alt="" /> : initialOf(member.username)}</div>
-          <strong>{member.displayName ?? member.username}</strong>
-          {member.role === 'OWNER' && <em>OWNER</em>}
-        </div>
-      ))}
-    </section>
+      <section className="member-group">
+        <span>{title}</span>
+        {members.map((member) => (
+            <div className={`member-row ${offline ? 'offline' : ''}`} key={member.userId}>
+              <div className="small-avatar">{member.avatarUrl ? <img src={member.avatarUrl} alt="" /> : initialOf(member.username)}</div>
+              <strong>{member.displayName ?? member.username}</strong>
+              {member.role === 'OWNER' && <em>OWNER</em>}
+            </div>
+        ))}
+      </section>
   );
 }
