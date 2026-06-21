@@ -76,7 +76,11 @@ public class InviteService {
         invite.code = uniqueCode();
         invite.maxUses = request.maxUses();
         invite.useCount = 0;
-        invite.expiresAt = request.expiresAt();
+        if (request.expiresAt() != null) {
+            invite.expiresAt = request.expiresAt();
+        } else {
+            invite.expiresAt = Instant.now().plusSeconds(7 * 24 * 60 * 60));
+        }
         invite.createdAt = Instant.now();
         return InviteMapper.code(inviteCodeRepository.save(invite));
     }
@@ -115,7 +119,8 @@ public class InviteService {
         if (invite.expiresAt != null) {
             query.addCriteria(Criteria.where("expiresAt").gt(Instant.now()));
         }
-        if (invite.maxUses != null) {
+        // FIX 1: Bỏ qua query điều kiện maxUses nếu người tạo set = 0 (Không giới hạn)
+        if (invite.maxUses != null && invite.maxUses > 0) {
             query.addCriteria(Criteria.where("useCount").lt(invite.maxUses));
         }
         var result = mongoTemplate.updateFirst(query, new Update().inc("useCount", 1), InviteCodeDocument.class);
@@ -185,12 +190,12 @@ public class InviteService {
                     serverInviteRepository.save(invite);
                     return new ApiException(ErrorCode.RESOURCE_NOT_FOUND, "Server không tồn tại.");
                 });
-        if (invite.expiresAt.isBefore(Instant.now())) {
-            invite.status = InviteStatus.EXPIRED;
-            invite.updatedAt = Instant.now();
-            serverInviteRepository.save(invite);
+
+        // FIX 2: Bỏ hàm save bị thừa và gây lỗi rollback ở đây. Chặn chuẩn xác bằng !isAfter()
+        if (!invite.expiresAt.isAfter(Instant.now())) {
             throw new ApiException(ErrorCode.INVITE_NOT_USABLE, "Direct invite đã hết hạn.");
         }
+
         if (membershipService.isMember(invite.serverId, inviteeId)) {
             invite.status = InviteStatus.CANCELLED;
             invite.updatedAt = Instant.now();
@@ -232,9 +237,14 @@ public class InviteService {
 
     private boolean usable(InviteCodeDocument invite) {
         Instant now = Instant.now();
-        return invite.revokedAt == null
-                && (invite.expiresAt == null || invite.expiresAt.isAfter(now))
-                && (invite.maxUses == null || invite.useCount < invite.maxUses);
+
+        if (invite.revokedAt != null) return false;
+
+        if (invite.expiresAt != null && now.isAfter(invite.expiresAt)) return false;
+
+        if (invite.maxUses != null && invite.useCount >= invite.maxUses) return false;
+
+        return true;
     }
 
     private void expirePending(ObjectId inviteeId) {
