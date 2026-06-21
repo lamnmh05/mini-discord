@@ -34,7 +34,7 @@ import type {
   WebSocketEvent
 } from '../../shared/types';
 
-type ModalMode = 'profile' | 'create-server' | 'join-server' | 'create-channel' | 'invite-user' | 'invite-code' | 'edit-channel' | null;
+type ModalMode = 'profile' | 'create-server' | 'join-server' | 'edit-server'| 'create-channel' | 'invite-user' | 'invite-code' | 'edit-channel' | null;
 type SendMessageVariables = { channelId: string; content: string; clientRequestId: string };
 
 function initialOf(value?: string) {
@@ -87,6 +87,12 @@ export function ChatShell() {
   const [selectedChannel, setSelectedChannel] = useState<Channel>();
   const [serverMenuOpen, setServerMenuOpen] = useState(false);
   const [notificationOpen, setNotificationOpen] = useState(false);
+
+  // edit server
+  const [serverIconUrl, setServerIconUrl] = useState('');
+  const [serverEditError, setServerEditError] = useState('');
+  const [serverIconUploadError, setServerIconUploadError] = useState('');
+  const serverIconInputRef = useRef<HTMLInputElement>(null);
 
   const servers = useQuery({
     queryKey: ['servers'],
@@ -249,6 +255,45 @@ export function ChatShell() {
     },
     onError: (error: any) => {
       alert(error.response?.data?.error?.message ?? 'Không thể xóa server.');
+    }
+  });
+
+  // Mutation đảm nhận cập nhật tên & icon server (UC11 Normal Flow)
+  const updateServer = useMutation({
+    mutationFn: () =>
+      unwrap(
+        api.patch<ApiResponse<Server>>(`/servers/${serverId}`, {
+          name: serverName.trim(),
+          iconUrl: serverIconUrl.trim() || null
+        })
+      ),
+    onMutate: () => setServerEditError(''),
+    onSuccess: () => {
+      setModal(null);
+      queryClient.invalidateQueries({ queryKey: ['servers'] }); // Làm mới sidebar hiển thị ngay tên mới (POST-1)
+    },
+    onError: (error: any) => {
+      setServerEditError(error.response?.data?.error?.message ?? 'Không thể cập nhật cấu hình server.');
+    }
+  });
+
+  // Mutation hỗ trợ upload file làm server icon từ máy tính
+  const uploadServerIcon = useMutation({
+    mutationFn: (file: File) => {
+      const form = new FormData();
+      form.append('file', file);
+      form.append('purpose', 'server-icon');
+      return unwrap(api.post<ApiResponse<Attachment>>('/files', form));
+    },
+    onMutate: () => {
+      setServerIconUploadError('');
+      setServerEditError('');
+    },
+    onSuccess: (file) => {
+      setServerIconUrl(file.fileUrl);
+    },
+    onError: (error: any) => {
+      setServerIconUploadError(error.response?.data?.error?.message ?? 'Upload ảnh thất bại.');
     }
   });
 
@@ -453,6 +498,15 @@ export function ChatShell() {
     if (mode === 'invite-code') setInviteMaxUses('');
     if (mode === 'edit-channel') setChannelName(channel?.name ?? '');
     if (mode === 'profile') fillProfileForm(currentProfile.data ?? auth.user);
+    if (mode === 'edit-server') {
+      setServerName(activeServer?.name ?? '');
+      setServerIconUrl(activeServer?.iconUrl ?? '');
+      setServerEditError('');
+      setServerIconUploadError('');
+      if (serverIconInputRef.current) {
+        serverIconInputRef.current.value = '';
+      }
+    }
   }
 
   function closeModal() {
@@ -520,7 +574,7 @@ export function ChatShell() {
               <span>{activeServer?.name ?? 'Mini Discord'}</span>
               <ChevronDown size={20} />
             </button>
-          
+
 
             {serverMenuOpen && (
                 <div className="server-menu">
@@ -546,6 +600,10 @@ export function ChatShell() {
                   )}
                   {isOwner && (
                       <>
+                        <button type="button" onClick={() => openModal('edit-server')}>
+                          Server settings
+                        </button>
+
                         <button type="button" onClick={() => openModal('create-channel')}>
                           Create channel
                         </button>
@@ -757,6 +815,70 @@ export function ChatShell() {
                       <input value={serverName} onChange={(event) => setServerName(event.target.value)} placeholder="Server name" autoFocus />
                       <button className="modal-primary" disabled={!serverName.trim() || createServer.isPending}>Create</button>
                     </form>
+                )}
+
+                {modal === 'edit-server' && (
+                  <form onSubmit={(event) => { event.preventDefault(); if (serverName.trim()) updateServer.mutate(); }}>
+                    <h2>Server settings</h2>
+
+                    <div className="profile-card">
+                      <div className="profile-avatar">
+                        {serverIconUrl.trim() ? <img src={serverIconUrl.trim()} alt="" /> : initialOf(serverName || activeServer?.name)}
+                      </div>
+                      <div>
+                        <strong>{serverName.trim() || activeServer?.name}</strong>
+                        <span>Server Owner Cài đặt</span>
+                      </div>
+                    </div>
+
+                    <label>
+                      Server name
+                      <input
+                        value={serverName}
+                        onChange={(event) => setServerName(event.target.value)}
+                        maxLength={100}
+                        required
+                        autoFocus
+                      />
+                    </label>
+
+                    <label>
+                      Server Icon URL
+                      <input
+                        value={serverIconUrl}
+                        onChange={(event) => setServerIconUrl(event.target.value)}
+                        placeholder="https://..."
+                      />
+                    </label>
+
+                    <div className="avatar-upload-row">
+                      <input
+                        ref={serverIconInputRef}
+                        type="file"
+                        accept="image/png,image/jpeg,image/gif,image/webp"
+                        onChange={(event) => {
+                          const file = event.currentTarget.files?.[0];
+                          if (file) uploadServerIcon.mutate(file);
+                        }}
+                      />
+                      <button
+                        className="secondary-button"
+                        type="button"
+                        onClick={() => serverIconInputRef.current?.click()}
+                        disabled={uploadServerIcon.isPending}
+                      >
+                        {uploadServerIcon.isPending ? 'Uploading...' : 'Upload Icon'}
+                      </button>
+                      <span>PNG, JPG, GIF, WebP tối đa 10 MB</span>
+                    </div>
+
+                    {serverIconUploadError && <p className="form-error">{serverIconUploadError}</p>}
+                    {serverEditError && <p className="form-error">{serverEditError}</p>}
+
+                    <button className="modal-primary" disabled={!serverName.trim() || updateServer.isPending}>
+                      {updateServer.isPending ? 'Saving...' : 'Save changes'}
+                    </button>
+                  </form>
                 )}
 
                 {modal === 'profile' && (
