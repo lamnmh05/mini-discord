@@ -7,6 +7,7 @@ import {
   Clipboard,
   Hash,
   LogOut,
+  Pencil,
   Plus,
   Search,
   Send,
@@ -71,6 +72,8 @@ export function ChatShell() {
   const [serverId, setServerId] = useState<string>();
   const [channelId, setChannelId] = useState<string>();
   const [message, setMessage] = useState('');
+  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+  const [editContent, setEditContent] = useState('');
   const [messageSearch, setMessageSearch] = useState('');
   const [serverName, setServerName] = useState('');
   const [channelName, setChannelName] = useState('');
@@ -341,6 +344,24 @@ export function ChatShell() {
     onMutate: () => setMessage(''),
     onSuccess: (created, variables) => {
       queryClient.setQueryData<Message[]>(['messages', variables.channelId], (old) => upsertMessage(old, created));
+    }
+  });
+
+
+  const editMessage = useMutation({
+    mutationFn: ({ messageId, content }: { messageId: string, content: string }) =>
+        unwrap(
+            api.patch<ApiResponse<Message>>(`/messages/${messageId}`, {
+              content
+            })
+        ),
+    onSuccess: (updatedMessage) => {
+      queryClient.setQueryData<Message[]>(['messages', channelId], (old) => upsertMessage(old, updatedMessage));
+      setEditingMessageId(null);
+      setEditContent('');
+    },
+    onError: (error: any) => {
+      alert(error.response?.data?.error?.message ?? 'Không thể sửa tin nhắn.');
     }
   });
 
@@ -778,26 +799,67 @@ export function ChatShell() {
                       <time>{formatTime(item.createdAt)}</time>
                       {item.editedAt && <span>(edited)</span>}
                     </div>
-                    {item.content && <p>{item.content}</p>}
-                    {(item.attachments ?? []).length > 0 && (
-                        <div className="attachments">
-                          {(item.attachments ?? []).map((file) => (
-                              <a key={file.storageKey} href={file.fileUrl} target="_blank" rel="noreferrer">
-                                {file.originalName}
-                              </a>
-                          ))}
+
+                    {editingMessageId === item.id ? (
+                        <div className="message-edit-composer">
+                          <input
+                              autoFocus
+                              value={editContent}
+                              onChange={(e) => setEditContent(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter' && !e.shiftKey) {
+                                  e.preventDefault();
+                                  if (editContent.trim() && editContent.trim() !== item.content) {
+                                    editMessage.mutate({ messageId: item.id, content: editContent.trim() });
+                                  } else {
+                                    setEditingMessageId(null); // Không có thay đổi gì thì hủy edit
+                                  }
+                                } else if (e.key === 'Escape') {
+                                  setEditingMessageId(null); // Bấm ESC để hủy
+                                }
+                              }}
+                          />
+                          <small>Nhấn <b>Enter</b> để lưu, <b>Escape</b> để hủy.</small>
                         </div>
-                    )}
-                    {(item.reactions ?? []).length > 0 && (
-                        <div className="reaction-list">
-                          {(item.reactions ?? []).map((reaction) => (
-                              <span key={reaction.emoji} className="reaction-chip">
-                        {reaction.emoji} {reaction.userIds.length}
-                      </span>
-                          ))}
-                        </div>
+                    ) : (
+                        <>
+                          {item.content && <p>{item.content}</p>}
+                          {(item.attachments ?? []).length > 0 && (
+                              <div className="attachments">
+                                {(item.attachments ?? []).map((file) => (
+                                    <a key={file.storageKey} href={file.fileUrl} target="_blank" rel="noreferrer">
+                                      {file.originalName}
+                                    </a>
+                                ))}
+                              </div>
+                          )}
+                          {(item.reactions ?? []).length > 0 && (
+                              <div className="reaction-list">
+                                {(item.reactions ?? []).map((reaction) => (
+                                    <span key={reaction.emoji} className="reaction-chip">
+                                      {reaction.emoji} {reaction.userIds.length}
+                                    </span>
+                                ))}
+                              </div>
+                          )}
+                        </>
                     )}
                   </div>
+
+                  {!editingMessageId && item.senderId === auth.user?.id && (
+                      <div className="message-actions">
+                        <button
+                            title="Sửa tin nhắn"
+                            type="button"
+                            onClick={() => {
+                              setEditingMessageId(item.id);
+                              setEditContent(item.content || '');
+                            }}
+                        >
+                          <Pencil size={15} />
+                        </button>
+                      </div>
+                  )}
                 </article>
             ))}
           </div>

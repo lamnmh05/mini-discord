@@ -126,14 +126,23 @@ public class MessageService {
         MessageDocument message = requireActiveMessage(messageIdValue);
         channelService.requireActiveChannel(message.channelId);
         membershipService.requireMember(message.serverId, userId);
+
         if (!message.senderId.equals(userId)) {
             throw new ApiException(ErrorCode.RESOURCE_FORBIDDEN, "Bạn chỉ được sửa message của chính mình.");
         }
-        message.content = request.content().trim();
+
+        String newContent = request.content().trim();
+
+        if (newContent.equals(message.content)) {
+            return MessageMapper.response(message);
+        }
+
+        message.content = newContent;
         message.editedAt = Instant.now();
         message.updatedAt = message.editedAt;
         message = messageRepository.save(message);
         MessageResponse response = MessageMapper.response(message);
+
         publisher.channelEvent(message.channelId.toHexString(), WebSocketEvent.of(
                 "MESSAGE_UPDATED",
                 message.serverId.toHexString(),

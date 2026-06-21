@@ -768,6 +768,7 @@ input:focus {
   padding: 4px 16px;
   margin-right: 4px;
   background: transparent;
+  position: relative;
 }
 
 .message-row:hover {
@@ -800,6 +801,74 @@ input:focus {
   margin: 3px 0 0;
   color: var(--white);
   overflow-wrap: anywhere;
+}
+
+
+
+.message-actions {
+  position: absolute;
+  right: 16px;
+  top: -8px;
+  display: none;
+  background: var(--primary);
+  border: 1px solid var(--tertiary);
+  border-radius: 4px;
+  padding: 2px;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+  z-index: 2;
+}
+
+.message-row:hover .message-actions {
+  display: flex;
+}
+
+.message-actions button {
+  background: transparent;
+  border: none;
+  color: var(--symbol);
+  cursor: pointer;
+  padding: 6px;
+  border-radius: 4px;
+  display: grid;
+  place-items: center;
+  transition: background-color 0.2s, color 0.2s;
+}
+
+.message-actions button:hover {
+  background: var(--secondary);
+  color: var(--white);
+}
+
+.message-edit-composer {
+  margin-top: 6px;
+}
+
+.message-edit-composer input {
+  width: 100%;
+  min-height: 38px;
+  border-radius: 6px;
+  background: var(--chat-input);
+  border: none;
+  color: var(--white);
+  padding: 8px 12px;
+  font-size: 14px;
+  outline: none;
+}
+
+.message-edit-composer input:focus {
+  box-shadow: 0 0 0 2px var(--link);
+}
+
+.message-edit-composer small {
+  display: block;
+  margin-top: 6px;
+  color: var(--gray);
+  font-size: 11px;
+}
+
+.message-edit-composer small b {
+  color: var(--link);
+  font-weight: normal;
 }
 
 .attachments {
