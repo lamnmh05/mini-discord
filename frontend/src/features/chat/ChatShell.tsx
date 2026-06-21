@@ -11,6 +11,7 @@ import {
   Plus,
   Search,
   Send,
+  Smile,
   Settings,
   Trash2,
   UserPlus,
@@ -74,6 +75,7 @@ export function ChatShell() {
   const [channelId, setChannelId] = useState<string>();
   const [message, setMessage] = useState('');
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+  const [reactionMenuId, setReactionMenuId] = useState<string | null>(null);
   const [editContent, setEditContent] = useState('');
   const [messageSearch, setMessageSearch] = useState('');
   const [serverName, setServerName] = useState('');
@@ -375,6 +377,21 @@ export function ChatShell() {
     },
     onError: (error: any) => {
       alert(error.response?.data?.error?.message ?? 'Không thể xóa tin nhắn.');
+    }
+  });
+
+  const toggleReaction = useMutation({
+    mutationFn: ({ messageId, emoji, isReacted }: { messageId: string, emoji: string, isReacted: boolean }) => {
+      const path = `/messages/${messageId}/reactions/${encodeURIComponent(emoji)}`;
+      return isReacted
+          ? unwrap(api.delete<ApiResponse<Message>>(path))
+          : unwrap(api.put<ApiResponse<Message>>(path));
+    },
+    onSuccess: (updatedMessage, variables) => {
+      queryClient.setQueryData<Message[]>(['messages', channelId], (old) => upsertMessage(old, updatedMessage));
+    },
+    onError: (error: any) => {
+      alert(error.response?.data?.error?.message ?? 'Không thể thao tác cảm xúc.');
     }
   });
 
@@ -864,24 +881,81 @@ export function ChatShell() {
                           )}
                           {(item.reactions ?? []).length > 0 && (
                               <div className="reaction-list">
-                                {(item.reactions ?? []).map((reaction) => (
-                                    <span key={reaction.emoji} className="reaction-chip">
-                                      {reaction.emoji} {reaction.userIds.length}
-                                    </span>
-                                ))}
+                                {(item.reactions ?? []).map((reaction) => {
+                                  const isReacted = reaction.userIds.includes(auth.user?.id ?? '');
+                                  return (
+                                      <button
+                                          key={reaction.emoji}
+                                          className="reaction-chip"
+                                          type="button"
+                                          onClick={() => toggleReaction.mutate({ messageId: item.id, emoji: reaction.emoji, isReacted })}
+                                          style={{
+                                            cursor: 'pointer',
+                                            background: isReacted ? 'rgba(88, 101, 242, 0.2)' : 'var(--secondary)',
+                                            border: isReacted ? '1px solid var(--discord)' : '1px solid rgba(255, 255, 255, 0.08)'
+                                          }}
+                                      >
+                                        {reaction.emoji} {reaction.userIds.length}
+                                      </button>
+                                  );
+                                })}
                               </div>
                           )}
                         </>
                     )}
                   </div>
 
-                  {!editingMessageId && (item.senderId === auth.user?.id || isOwner) && (
-                      <div className="message-actions">
+                  {!editingMessageId && (
+                      <div className="message-actions" style={{ display: 'flex', alignItems: 'center', marginTop: '6px' }}>
+
+                        <div style={{ position: 'relative', display: 'inline-block' }}>
+                          {reactionMenuId === item.id && (
+                              <div className="emoji-picker" style={{
+                                position: 'absolute',
+
+                                top: '50%',
+                                right: '100%',
+                                transform: 'translateY(-50%)',
+                                marginLeft: '8px',
+                                display: 'flex',
+                                gap: '4px',
+                                background: 'var(--tertiary)',
+                                padding: '6px',
+                                borderRadius: '8px',
+                                border: '1px solid var(--secondary)',
+                                zIndex: 50,
+                                boxShadow: '0 4px 14px rgba(0,0,0,0.3)'
+                              }}>
+                                {['👍', '❤️', '😂', '🔥', '😢', '🙏'].map(emoji => (
+                                    <button
+                                        key={emoji}
+                                        type="button"
+                                        style={{ background: 'transparent', border: 'none', fontSize: '18px', cursor: 'pointer', padding: '4px' }}
+                                        onClick={() => {
+                                          const isReacted = item.reactions?.some(r => r.emoji === emoji && r.userIds.includes(auth.user?.id ?? ''));
+                                          toggleReaction.mutate({ messageId: item.id, emoji, isReacted: !!isReacted });
+                                          setReactionMenuId(null);
+                                        }}
+                                    >
+                                      {emoji}
+                                    </button>
+                                ))}
+                              </div>
+                          )}
+                          <button
+                              title="Thêm cảm xúc"
+                              type="button"
+                              onClick={() => setReactionMenuId(reactionMenuId === item.id ? null : item.id)}
+                          >
+                            <Smile size={15} />
+                          </button>
+                        </div>
 
                         {item.senderId === auth.user?.id && (
                             <button
                                 title="Sửa tin nhắn"
                                 type="button"
+                                style={{ marginLeft: '8px' }}
                                 onClick={() => {
                                   setEditingMessageId(item.id);
                                   setEditContent(item.content || '');
@@ -891,22 +965,21 @@ export function ChatShell() {
                             </button>
                         )}
 
-                        <button
-                            title={item.senderId === auth.user?.id ? "Xóa tin nhắn của tôi" : "Xóa tin nhắn member (Quyền OWNER)"}
-                            type="button"
-                            onClick={() => {
-                              if (window.confirm('Bạn có chắc chắn muốn xóa tin nhắn này không?')) {
-                                deleteMessage.mutate(item.id);
-                              }
-                            }}
-                            disabled={deleteMessage.isPending}
-                            style={{
-                              color: '#fa777c',
-                              marginLeft: item.senderId === auth.user?.id ? '8px' : '0'
-                            }}
-                        >
-                          <Trash2 size={15} />
-                        </button>
+                        {(item.senderId === auth.user?.id || isOwner) && (
+                            <button
+                                title={item.senderId === auth.user?.id ? "Xóa tin nhắn của tôi" : "Xóa tin nhắn member (Quyền OWNER)"}
+                                type="button"
+                                onClick={() => {
+                                  if (window.confirm('Bạn có chắc chắn muốn xóa tin nhắn này không?')) {
+                                    deleteMessage.mutate(item.id);
+                                  }
+                                }}
+                                disabled={deleteMessage.isPending}
+                                style={{ color: '#fa777c', marginLeft: '8px' }}
+                            >
+                              <Trash2 size={15} />
+                            </button>
+                        )}
 
                       </div>
                   )}
