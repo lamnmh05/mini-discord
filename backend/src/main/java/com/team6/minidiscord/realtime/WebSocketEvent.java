@@ -10,6 +10,7 @@ public record WebSocketEvent<T>(
         Instant occurredAt,
         String serverId,
         String channelId,
+        String conversationId,
         T data
 ) {
     public static <T> WebSocketEvent<T> of(String eventType, String serverId, String channelId, T data) {
@@ -20,6 +21,20 @@ public record WebSocketEvent<T>(
                 Instant.now(),
                 serverId,
                 channelId,
+                null,
+                data
+        );
+    }
+
+    public static <T> WebSocketEvent<T> direct(String eventType, String conversationId, T data) {
+        return new WebSocketEvent<>(
+                1,
+                UUID.randomUUID().toString(),
+                eventType,
+                Instant.now(),
+                null,
+                null,
+                conversationId,
                 data
         );
     }

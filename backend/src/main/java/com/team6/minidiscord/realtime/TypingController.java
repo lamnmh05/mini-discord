@@ -5,6 +5,7 @@ import com.team6.minidiscord.channel.ChannelService;
 import com.team6.minidiscord.common.error.ApiException;
 import com.team6.minidiscord.common.error.ErrorCode;
 import com.team6.minidiscord.common.util.ObjectIds;
+import com.team6.minidiscord.direct.DirectConversationService;
 import com.team6.minidiscord.membership.MembershipService;
 import com.team6.minidiscord.security.AuthenticatedUser;
 import org.springframework.messaging.handler.annotation.DestinationVariable;
@@ -19,11 +20,18 @@ import java.util.Map;
 public class TypingController {
     private final ChannelService channelService;
     private final MembershipService membershipService;
+    private final DirectConversationService directConversationService;
     private final WebSocketEventPublisher publisher;
 
-    public TypingController(ChannelService channelService, MembershipService membershipService, WebSocketEventPublisher publisher) {
+    public TypingController(
+            ChannelService channelService,
+            MembershipService membershipService,
+            DirectConversationService directConversationService,
+            WebSocketEventPublisher publisher
+    ) {
         this.channelService = channelService;
         this.membershipService = membershipService;
+        this.directConversationService = directConversationService;
         this.publisher = publisher;
     }
 
@@ -37,6 +45,18 @@ public class TypingController {
                 typing ? "TYPING_STARTED" : "TYPING_STOPPED",
                 channel.serverId.toHexString(),
                 channelId,
+                Map.of("userId", user.id().toHexString(), "username", user.username(), "typing", typing)
+        ));
+    }
+
+    @MessageMapping("/direct-conversations/{conversationId}/typing")
+    public void directTyping(@DestinationVariable String conversationId, Map<String, Boolean> payload, SimpMessageHeaderAccessor headers) {
+        AuthenticatedUser user = currentUser(headers);
+        directConversationService.requireParticipant(ObjectIds.parse(conversationId), user.id());
+        boolean typing = payload != null && Boolean.TRUE.equals(payload.get("typing"));
+        publisher.directTypingEvent(conversationId, WebSocketEvent.direct(
+                typing ? "DIRECT_TYPING_STARTED" : "DIRECT_TYPING_STOPPED",
+                conversationId,
                 Map.of("userId", user.id().toHexString(), "username", user.username(), "typing", typing)
         ));
     }

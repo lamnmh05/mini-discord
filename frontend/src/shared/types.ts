@@ -45,8 +45,10 @@ export type Member = {
 
 export type Message = {
   id: string;
-  serverId: string;
-  channelId: string;
+  scope: 'SERVER' | 'DIRECT';
+  serverId?: string;
+  channelId?: string;
+  conversationId?: string;
   senderId: string;
   senderSnapshot: { username: string; displayName?: string; avatarUrl?: string };
   content?: string;
@@ -101,5 +103,39 @@ export type WebSocketEvent<T> = {
   occurredAt: string;
   serverId?: string;
   channelId?: string;
+  conversationId?: string;
   data: T;
+};
+
+export type FriendUser = {
+  userId: string;
+  username: string;
+  displayName?: string;
+  avatarUrl?: string;
+  customStatus?: string;
+  lastSeenAt?: string;
+  presenceStatus: 'ONLINE' | 'OFFLINE';
+};
+
+export type Friend = {
+  friendshipId: string;
+  user: FriendUser;
+  friendsSince?: string;
+};
+
+export type FriendRequest = {
+  id: string;
+  user: FriendUser;
+  direction: 'INCOMING' | 'OUTGOING';
+  requestedAt: string;
+};
+
+export type DirectConversation = {
+  id: string;
+  recipient: FriendUser;
+  lastMessagePreview?: string;
+  lastMessageAt?: string;
+  unreadCount: number;
+  createdAt: string;
+  updatedAt: string;
 };

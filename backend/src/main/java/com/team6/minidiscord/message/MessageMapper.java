@@ -24,10 +24,13 @@ public final class MessageMapper {
     }
 
     public static MessageResponse response(MessageDocument message) {
+        MessageScope scope = message.scope == null ? MessageScope.SERVER : message.scope;
         return new MessageResponse(
                 message.id.toHexString(),
-                message.serverId.toHexString(),
-                message.channelId.toHexString(),
+                scope.name(),
+                message.serverId == null ? null : message.serverId.toHexString(),
+                message.channelId == null ? null : message.channelId.toHexString(),
+                message.conversationId == null ? null : message.conversationId.toHexString(),
                 message.senderId.toHexString(),
                 new SenderSnapshotResponse(
                         message.senderSnapshot.username,

@@ -19,6 +19,13 @@ public class WebSocketEventPublisher {
         ));
     }
 
+    public void directConversationEvent(String conversationId, WebSocketEvent<?> event) {
+        TransactionEvents.afterCommit(() -> messagingTemplate.convertAndSend(
+                "/topic/direct-conversations/" + conversationId + "/messages",
+                event
+        ));
+    }
+
     public void serverChannelsEvent(String serverId, WebSocketEvent<?> event) {
         TransactionEvents.afterCommit(() -> messagingTemplate.convertAndSend(
                 "/topic/servers/" + serverId + "/channels",
@@ -39,6 +46,10 @@ public class WebSocketEventPublisher {
 
     public void typingEvent(String channelId, WebSocketEvent<?> event) {
         messagingTemplate.convertAndSend("/topic/channels/" + channelId + "/typing", event);
+    }
+
+    public void directTypingEvent(String conversationId, WebSocketEvent<?> event) {
+        messagingTemplate.convertAndSend("/topic/direct-conversations/" + conversationId + "/typing", event);
     }
 
     public void userNotification(String userId, WebSocketEvent<?> event) {

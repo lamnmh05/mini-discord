@@ -4,6 +4,7 @@ import com.team6.minidiscord.channel.ChannelRepository;
 import com.team6.minidiscord.common.error.ApiException;
 import com.team6.minidiscord.common.error.ErrorCode;
 import com.team6.minidiscord.common.util.ObjectIds;
+import com.team6.minidiscord.direct.DirectConversationService;
 import com.team6.minidiscord.membership.MembershipService;
 import com.team6.minidiscord.security.AuthenticatedUser;
 import com.team6.minidiscord.security.JwtService;
@@ -26,11 +27,18 @@ public class WebSocketSecurityInterceptor implements ChannelInterceptor {
     private final JwtService jwtService;
     private final MembershipService membershipService;
     private final ChannelRepository channelRepository;
+    private final DirectConversationService directConversationService;
 
-    public WebSocketSecurityInterceptor(JwtService jwtService, MembershipService membershipService, ChannelRepository channelRepository) {
+    public WebSocketSecurityInterceptor(
+            JwtService jwtService,
+            MembershipService membershipService,
+            ChannelRepository channelRepository,
+            DirectConversationService directConversationService
+    ) {
         this.jwtService = jwtService;
         this.membershipService = membershipService;
         this.channelRepository = channelRepository;
+        this.directConversationService = directConversationService;
     }
 
     @Override
@@ -81,7 +89,14 @@ public class WebSocketSecurityInterceptor implements ChannelInterceptor {
                             () -> {
                                 throw new ApiException(ErrorCode.RESOURCE_NOT_FOUND, "Channel không tồn tại.");
                             }
-                    );
+            );
+            return;
+        }
+        if (destination.startsWith("/topic/direct-conversations/") || destination.startsWith("/app/direct-conversations/")) {
+            String conversationId = destination.split("/")[3];
+            if (!directConversationService.isParticipant(ObjectIds.parse(conversationId), userId)) {
+                throw new ApiException(ErrorCode.RESOURCE_FORBIDDEN, "You are not a participant in this direct conversation.");
+            }
             return;
         }
         if (destination.startsWith("/topic/servers/")) {

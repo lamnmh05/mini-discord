@@ -70,6 +70,25 @@ try {
   $updatedProfile = Request-Json Patch "$BaseUrl/users/me" @{ displayName = "Owner $stamp"; customStatus = "Testing use cases" } $owner.Token $owner.Session
   Add-Result "UC05" "Update profile" "PASS" $updatedProfile.data.displayName
 
+  $friendRequest = Request-Json Post "$BaseUrl/friends/requests" @{ username = $member.Username } $owner.Token $owner.Session
+  Add-Result "UC42" "Send friend request" "PASS" $friendRequest.data.id
+  $memberFriendRequests = Request-Json Get "$BaseUrl/friends/requests" $null $member.Token $member.Session
+  Add-Result "UC43" "View friend requests" "PASS" "count=$($memberFriendRequests.data.Count)"
+  $acceptedFriend = Request-Json Post "$BaseUrl/friends/requests/$($friendRequest.data.id)/accept" @{} $member.Token $member.Session
+  Add-Result "UC44" "Accept friend request" "PASS" $acceptedFriend.data.user.username
+  $ownerFriends = Request-Json Get "$BaseUrl/friends" $null $owner.Token $owner.Session
+  Add-Result "UC45" "View friends" "PASS" "count=$($ownerFriends.data.Count)"
+  $directConversation = Request-Json Post "$BaseUrl/direct-conversations" @{ userId = $member.User.id } $owner.Token $owner.Session
+  Add-Result "UC46" "Open direct conversation" "PASS" $directConversation.data.id
+  $directMessage = Request-Json Post "$BaseUrl/direct-conversations/$($directConversation.data.id)/messages" @{ content = "direct hello $stamp"; attachments = @(); clientRequestId = [guid]::NewGuid().ToString() } $owner.Token $owner.Session
+  Add-Result "UC47" "Send direct message" "PASS" $directMessage.data.id
+  $directHistory = Request-Json Get "$BaseUrl/direct-conversations/$($directConversation.data.id)/messages" $null $member.Token $member.Session
+  Add-Result "UC48" "View direct messages" "PASS" "count=$($directHistory.data.Count)"
+  $directReacted = Request-Json Put "$BaseUrl/messages/$($directMessage.data.id)/reactions/%F0%9F%91%8D" @{} $member.Token $member.Session
+  Add-Result "UC49" "React to direct message" "PASS" "reactions=$($directReacted.data.reactions.Count)"
+  Request-Json Patch "$BaseUrl/direct-conversations/$($directConversation.data.id)/read" @{} $member.Token $member.Session | Out-Null
+  Add-Result "UC50" "Mark direct conversation read" "PASS" $directConversation.data.id
+
   $server = Request-Json Post "$BaseUrl/servers" @{ name = "UseCase Server $stamp" } $owner.Token $owner.Session
   $serverId = $server.data.id
   $defaultChannelId = $server.data.defaultChannelId

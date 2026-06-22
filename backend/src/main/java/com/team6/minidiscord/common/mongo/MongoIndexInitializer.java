@@ -44,10 +44,20 @@ public class MongoIndexInitializer {
                 .partial(PartialIndexFilter.of(Criteria.where("deletedAt").is(null))));
 
         index("messages", new Index().on("channelId", Sort.Direction.ASC).on("createdAt", Sort.Direction.DESC).on("_id", Sort.Direction.DESC));
+        index("messages", new Index().on("conversationId", Sort.Direction.ASC).on("createdAt", Sort.Direction.DESC).on("_id", Sort.Direction.DESC));
         index("messages", new Index().on("serverId", Sort.Direction.ASC).on("createdAt", Sort.Direction.DESC).on("_id", Sort.Direction.DESC));
         index("messages", new Index().on("senderId", Sort.Direction.ASC).on("createdAt", Sort.Direction.DESC));
         index("messages", new Index().on("senderId", Sort.Direction.ASC).on("clientRequestId", Sort.Direction.ASC).unique().sparse());
         mongoTemplate.indexOps("messages").ensureIndex(new TextIndexDefinition.TextIndexDefinitionBuilder().onField("content").build());
+
+        index("friendships", new Index().on("pairKey", Sort.Direction.ASC).unique());
+        index("friendships", new Index().on("requesterId", Sort.Direction.ASC).on("status", Sort.Direction.ASC).on("requestedAt", Sort.Direction.DESC));
+        index("friendships", new Index().on("addresseeId", Sort.Direction.ASC).on("status", Sort.Direction.ASC).on("requestedAt", Sort.Direction.DESC));
+
+        index("direct_conversations", new Index().on("participantKey", Sort.Direction.ASC).unique());
+        index("direct_conversations", new Index().on("participantIds", Sort.Direction.ASC).on("lastMessageAt", Sort.Direction.DESC));
+        index("direct_participants", new Index().on("conversationId", Sort.Direction.ASC).on("userId", Sort.Direction.ASC).unique());
+        index("direct_participants", new Index().on("userId", Sort.Direction.ASC).on("updatedAt", Sort.Direction.DESC));
 
         index("invite_codes", new Index().on("code", Sort.Direction.ASC).unique());
         index("invite_codes", new Index().on("serverId", Sort.Direction.ASC).on("createdAt", Sort.Direction.DESC));

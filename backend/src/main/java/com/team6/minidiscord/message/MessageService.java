@@ -7,6 +7,7 @@ import com.team6.minidiscord.common.api.CursorPage;
 import com.team6.minidiscord.common.error.ApiException;
 import com.team6.minidiscord.common.error.ErrorCode;
 import com.team6.minidiscord.common.util.ObjectIds;
+import com.team6.minidiscord.direct.DirectConversationService;
 import com.team6.minidiscord.file.FileStorageService;
 import com.team6.minidiscord.membership.MemberRole;
 import com.team6.minidiscord.membership.MembershipService;
@@ -44,6 +45,7 @@ public class MessageService {
     private final UserService userService;
     private final FileStorageService fileStorageService;
     private final WebSocketEventPublisher publisher;
+    private final DirectConversationService directConversationService;
 
     public MessageService(
             MessageRepository messageRepository,
@@ -53,7 +55,8 @@ public class MessageService {
             MembershipService membershipService,
             UserService userService,
             FileStorageService fileStorageService,
-            WebSocketEventPublisher publisher
+            WebSocketEventPublisher publisher,
+            DirectConversationService directConversationService
     ) {
         this.messageRepository = messageRepository;
         this.mongoTemplate = mongoTemplate;
@@ -63,6 +66,7 @@ public class MessageService {
         this.userService = userService;
         this.fileStorageService = fileStorageService;
         this.publisher = publisher;
+        this.directConversationService = directConversationService;
     }
 
     public CursorPage<MessageResponse> history(ObjectId userId, String channelIdValue, String cursor, Integer limit) {
@@ -76,6 +80,17 @@ public class MessageService {
         query.limit(pageSize + 1);
         List<MessageDocument> docs = mongoTemplate.find(query, MessageDocument.class);
         return page(docs, pageSize);
+    }
+
+    public CursorPage<MessageResponse> directHistory(ObjectId userId, String conversationIdValue, String cursor, Integer limit) {
+        ObjectId conversationId = ObjectIds.parse(conversationIdValue);
+        directConversationService.requireParticipant(conversationId, userId);
+        int pageSize = clamp(limit);
+        Query query = new Query(Criteria.where("conversationId").is(conversationId).and("deletedAt").is(null));
+        applyCursor(query, cursor);
+        query.with(Sort.by(Sort.Direction.DESC, "createdAt").and(Sort.by(Sort.Direction.DESC, "_id")));
+        query.limit(pageSize + 1);
+        return page(mongoTemplate.find(query, MessageDocument.class), pageSize);
     }
 
     @Transactional
@@ -98,6 +113,7 @@ public class MessageService {
         UserDocument sender = userService.getActiveUser(userId);
         Instant now = Instant.now();
         MessageDocument message = new MessageDocument();
+        message.scope = MessageScope.SERVER;
         message.serverId = channel.serverId;
         message.channelId = channel.id;
         message.senderId = userId;
@@ -122,10 +138,57 @@ public class MessageService {
     }
 
     @Transactional
+    public MessageResponse sendDirect(ObjectId userId, String conversationIdValue, CreateMessageRequest request) {
+        ObjectId conversationId = ObjectIds.parse(conversationIdValue);
+        directConversationService.requireCanMessage(conversationId, userId);
+        String normalizedContent = request.content() == null ? null : request.content().trim();
+        List<Attachment> attachments = MessageMapper.attachmentsFromInputs(request.attachments());
+        if ((normalizedContent == null || normalizedContent.isBlank()) && attachments.isEmpty()) {
+            throw new ApiException(ErrorCode.VALIDATION_ERROR, "Message needs content or attachment.");
+        }
+        if (request.clientRequestId() != null && !request.clientRequestId().isBlank()) {
+            var existing = messageRepository.findBySenderIdAndClientRequestId(userId, request.clientRequestId());
+            if (existing.isPresent()) {
+                return MessageMapper.response(existing.get());
+            }
+        }
+        fileStorageService.verifyOwnership(userId, attachments);
+        UserDocument sender = userService.getActiveUser(userId);
+        Instant now = Instant.now();
+        MessageDocument message = new MessageDocument();
+        message.scope = MessageScope.DIRECT;
+        message.conversationId = conversationId;
+        message.senderId = userId;
+        message.content = normalizedContent;
+        message.messageType = messageType(normalizedContent, attachments);
+        message.senderSnapshot = snapshot(sender);
+        message.attachments = attachments;
+        message.reactions = new ArrayList<>();
+        message.clientRequestId = request.clientRequestId();
+        message.createdAt = now;
+        message.updatedAt = now;
+        message = messageRepository.save(message);
+        fileStorageService.consumeOwnership(userId, attachments);
+        directConversationService.recordMessage(message);
+        MessageResponse response = MessageMapper.response(message);
+        publisher.directConversationEvent(conversationId.toHexString(), WebSocketEvent.direct(
+                "DIRECT_MESSAGE_CREATED",
+                conversationId.toHexString(),
+                response
+        ));
+        return response;
+    }
+
+    @Transactional
     public MessageResponse edit(ObjectId userId, String messageIdValue, EditMessageRequest request) {
         MessageDocument message = requireActiveMessage(messageIdValue);
-        channelService.requireActiveChannel(message.channelId);
-        membershipService.requireMember(message.serverId, userId);
+        MessageScope scope = scope(message);
+        if (scope == MessageScope.SERVER) {
+            channelService.requireActiveChannel(message.channelId);
+            membershipService.requireMember(message.serverId, userId);
+        } else {
+            directConversationService.requireParticipant(message.conversationId, userId);
+        }
 
         if (!message.senderId.equals(userId)) {
             throw new ApiException(ErrorCode.RESOURCE_FORBIDDEN, "Bạn chỉ được sửa message của chính mình.");
@@ -143,34 +206,37 @@ public class MessageService {
         message = messageRepository.save(message);
         MessageResponse response = MessageMapper.response(message);
 
-        publisher.channelEvent(message.channelId.toHexString(), WebSocketEvent.of(
-                "MESSAGE_UPDATED",
-                message.serverId.toHexString(),
-                message.channelId.toHexString(),
-                response
-        ));
+        publishMessageEvent(message, scope == MessageScope.SERVER ? "MESSAGE_UPDATED" : "DIRECT_MESSAGE_UPDATED", response);
         return response;
     }
 
     @Transactional
     public void softDelete(ObjectId userId, String messageIdValue) {
         MessageDocument message = requireActiveMessage(messageIdValue);
-        channelService.requireActiveChannel(message.channelId);
-        ServerMemberDocument member = membershipService.requireMember(message.serverId, userId);
-        if (!message.senderId.equals(userId) && member.role != MemberRole.OWNER) {
+        MessageScope scope = scope(message);
+        ServerMemberDocument member = null;
+        if (scope == MessageScope.SERVER) {
+            channelService.requireActiveChannel(message.channelId);
+            member = membershipService.requireMember(message.serverId, userId);
+        } else {
+            directConversationService.requireParticipant(message.conversationId, userId);
+        }
+        if (scope == MessageScope.SERVER && !message.senderId.equals(userId) && member.role != MemberRole.OWNER) {
             throw new ApiException(ErrorCode.RESOURCE_FORBIDDEN, "Bạn không có quyền xóa message này.");
+        }
+        if (scope == MessageScope.DIRECT && !message.senderId.equals(userId)) {
+            throw new ApiException(ErrorCode.RESOURCE_FORBIDDEN, "You can only delete your own direct messages.");
         }
         Instant now = Instant.now();
         message.deletedAt = now;
         message.deletedById = userId;
         message.updatedAt = now;
         messageRepository.save(message);
-        publisher.channelEvent(message.channelId.toHexString(), WebSocketEvent.of(
-                "MESSAGE_DELETED",
-                message.serverId.toHexString(),
-                message.channelId.toHexString(),
-                java.util.Map.of("messageId", message.id.toHexString(), "deletedById", userId.toHexString())
-        ));
+        if (scope == MessageScope.DIRECT) {
+            directConversationService.refreshLastMessage(message.conversationId);
+        }
+        publishMessageEvent(message, scope == MessageScope.SERVER ? "MESSAGE_DELETED" : "DIRECT_MESSAGE_DELETED",
+                java.util.Map.of("messageId", message.id.toHexString(), "deletedById", userId.toHexString()));
     }
 
     @Transactional
@@ -249,8 +315,12 @@ public class MessageService {
             throw new ApiException(ErrorCode.VALIDATION_ERROR, "Emoji không hợp lệ.");
         }
         MessageDocument message = requireActiveMessage(messageIdValue);
-        channelService.requireActiveChannel(message.channelId);
-        membershipService.requireMember(message.serverId, userId);
+        if (scope(message) == MessageScope.SERVER) {
+            channelService.requireActiveChannel(message.channelId);
+            membershipService.requireMember(message.serverId, userId);
+        } else {
+            directConversationService.requireParticipant(message.conversationId, userId);
+        }
         return message;
     }
 
@@ -313,12 +383,28 @@ public class MessageService {
 
     private void publishReaction(MessageDocument message) {
         MessageResponse response = MessageMapper.response(message);
-        publisher.channelEvent(message.channelId.toHexString(), WebSocketEvent.of(
-                "REACTION_UPDATED",
-                message.serverId.toHexString(),
-                message.channelId.toHexString(),
-                response
-        ));
+        publishMessageEvent(message, scope(message) == MessageScope.SERVER ? "REACTION_UPDATED" : "DIRECT_REACTION_UPDATED", response);
+    }
+
+    private MessageScope scope(MessageDocument message) {
+        return message.scope == null ? MessageScope.SERVER : message.scope;
+    }
+
+    private void publishMessageEvent(MessageDocument message, String eventType, Object data) {
+        if (scope(message) == MessageScope.SERVER) {
+            publisher.channelEvent(message.channelId.toHexString(), WebSocketEvent.of(
+                    eventType,
+                    message.serverId.toHexString(),
+                    message.channelId.toHexString(),
+                    data
+            ));
+        } else {
+            publisher.directConversationEvent(message.conversationId.toHexString(), WebSocketEvent.direct(
+                    eventType,
+                    message.conversationId.toHexString(),
+                    data
+            ));
+        }
     }
 
     private static final class TextQueryCompat {

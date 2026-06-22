@@ -6,7 +6,9 @@ import {
   ChevronDown,
   Clipboard,
   Hash,
+  Home,
   LogOut,
+  MessageCircle,
   Pencil,
   Plus,
   Search,
@@ -28,6 +30,10 @@ import type {
   Attachment,
   Channel,
   CurrentUser,
+  DirectConversation,
+  Friend,
+  FriendRequest,
+  FriendUser,
   InviteCode,
   Member,
   Message,
@@ -39,7 +45,10 @@ import type {
 
 type ModalMode = 'profile' | 'create-server' | 'join-server' | 'edit-server'| 'create-channel' | 'invite-user' | 'invite-code' | 'edit-channel' | null;
 
-type SendMessageVariables = { channelId: string; content: string; clientRequestId: string; attachments: Attachment[] };
+type ActiveView = 'home' | 'server' | 'direct';
+type FriendTab = 'all' | 'online' | 'pending' | 'add';
+type MessageTarget = { type: 'server'; id: string } | { type: 'direct'; id: string };
+type SendMessageVariables = { target: MessageTarget; content: string; clientRequestId: string; attachments: Attachment[] };
 
 type TypingPayload = { userId: string; username: string; typing: boolean };
 type TypingUser = { userId: string; username: string };
@@ -66,6 +75,10 @@ function upsertMessage(messages: Message[] | undefined, next: Message) {
   return exists ? current.map((item) => (item.id === next.id ? next : item)) : [next, ...current];
 }
 
+function messageQueryKey(target: MessageTarget) {
+  return target.type === 'direct' ? ['direct-messages', target.id] : ['messages', target.id];
+}
+
 function removeMessage(messages: Message[] | undefined, messageId: string) {
   return (messages ?? []).filter((item) => item.id !== messageId);
 }
@@ -85,8 +98,14 @@ export function ChatShell() {
   const typingStartedRef = useRef(false);
   const typingStopTimerRef = useRef<number | undefined>(undefined);
   const typingUserTimersRef = useRef<Record<string, number>>({});
+  const typingTargetRef = useRef<MessageTarget | undefined>(undefined);
+  const [activeView, setActiveView] = useState<ActiveView>('home');
   const [serverId, setServerId] = useState<string>();
   const [channelId, setChannelId] = useState<string>();
+  const [directConversationId, setDirectConversationId] = useState<string>();
+  const [friendTab, setFriendTab] = useState<FriendTab>('all');
+  const [friendUsername, setFriendUsername] = useState('');
+  const [friendError, setFriendError] = useState('');
   const [message, setMessage] = useState('');
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [reactionMenuId, setReactionMenuId] = useState<string | null>(null);
@@ -125,6 +144,24 @@ export function ChatShell() {
     queryFn: () => unwrap(api.get<ApiResponse<Server[]>>('/servers'))
   });
 
+  const friends = useQuery({
+    queryKey: ['friends'],
+    queryFn: () => unwrap(api.get<ApiResponse<Friend[]>>('/friends')),
+    refetchInterval: 15000
+  });
+
+  const friendRequests = useQuery({
+    queryKey: ['friend-requests'],
+    queryFn: () => unwrap(api.get<ApiResponse<FriendRequest[]>>('/friends/requests')),
+    refetchInterval: 5000
+  });
+
+  const directConversations = useQuery({
+    queryKey: ['direct-conversations'],
+    queryFn: () => unwrap(api.get<ApiResponse<DirectConversation[]>>('/direct-conversations')),
+    refetchInterval: 5000
+  });
+
   useEffect(() => {
     if (!serverId && servers.data?.length) {
       setServerId(servers.data[0].id);
@@ -154,6 +191,12 @@ export function ChatShell() {
     enabled: Boolean(channelId)
   });
 
+  const directMessages = useQuery({
+    queryKey: ['direct-messages', directConversationId],
+    queryFn: () => unwrap(api.get<ApiResponse<Message[]>>(`/direct-conversations/${directConversationId}/messages`)),
+    enabled: Boolean(activeView === 'direct' && directConversationId)
+  });
+
   const notifications = useQuery({
     queryKey: ['notifications'],
     queryFn: () => unwrap(api.get<ApiResponse<Notification[]>>('/notifications?isRead=false'))
@@ -178,7 +221,17 @@ export function ChatShell() {
 
   const activeServer = useMemo(() => servers.data?.find((server) => server.id === serverId), [serverId, servers.data]);
   const activeChannel = useMemo(() => channels.data?.find((channel) => channel.id === channelId), [channelId, channels.data]);
-  const searchEnabled = Boolean(serverId && messageSearch.trim().length >= 2);
+  const activeDirectConversation = useMemo(
+    () => directConversations.data?.find((conversation) => conversation.id === directConversationId),
+    [directConversationId, directConversations.data]
+  );
+  const activeMessageTarget = useMemo<MessageTarget | undefined>(() => {
+    if (activeView === 'direct' && directConversationId) return { type: 'direct', id: directConversationId };
+    if (activeView === 'server' && channelId) return { type: 'server', id: channelId };
+    return undefined;
+  }, [activeView, channelId, directConversationId]);
+  const activeMessageCacheKey = activeMessageTarget ? messageQueryKey(activeMessageTarget) : undefined;
+  const searchEnabled = Boolean(activeView === 'server' && serverId && messageSearch.trim().length >= 2);
 
   const searchMessages = useQuery({
     queryKey: ['message-search', serverId, channelId, messageSearch],
@@ -191,11 +244,27 @@ export function ChatShell() {
     enabled: searchEnabled
   });
 
-  const visibleMessages = searchEnabled ? searchMessages.data ?? [] : messages.data ?? [];
+  const visibleMessages = activeView === 'direct'
+    ? directMessages.data ?? []
+    : searchEnabled ? searchMessages.data ?? [] : messages.data ?? [];
   const renderedMessages = useMemo(() => sortMessages(visibleMessages), [visibleMessages]);
+  const messageLoading = activeView === 'direct' ? directMessages.isLoading : messages.isLoading;
+  const messageError = activeView === 'direct' ? directMessages.isError : messages.isError;
   const lastRenderedMessageId = renderedMessages[renderedMessages.length - 1]?.id;
   const onlineMembers = useMemo(() => members.data?.filter((member) => member.presenceStatus === 'ONLINE') ?? [], [members.data]);
   const offlineMembers = useMemo(() => members.data?.filter((member) => member.presenceStatus !== 'ONLINE') ?? [], [members.data]);
+  const incomingFriendRequests = useMemo(
+    () => (friendRequests.data ?? []).filter((request) => request.direction === 'INCOMING'),
+    [friendRequests.data]
+  );
+  const outgoingFriendRequests = useMemo(
+    () => (friendRequests.data ?? []).filter((request) => request.direction === 'OUTGOING'),
+    [friendRequests.data]
+  );
+  const visibleFriends = useMemo(
+    () => (friends.data ?? []).filter((friend) => friendTab !== 'online' || friend.user.presenceStatus === 'ONLINE'),
+    [friendTab, friends.data]
+  );
   const visibleNotifications = useMemo(
     () => (notifications.data ?? []).filter((notification) => notification.type !== 'SERVER_INVITE' && !notification.serverInviteId),
     [notifications.data]
@@ -218,10 +287,13 @@ export function ChatShell() {
   const typingText = useMemo(() => {
     const names = Object.values(typingUsers).map((typingUser) => {
       const member = members.data?.find((item) => item.userId === typingUser.userId);
-      return member?.displayName ?? member?.username ?? typingUser.username;
+      const friend = friends.data?.find((item) => item.user.userId === typingUser.userId);
+      const directRecipient = activeDirectConversation?.recipient.userId === typingUser.userId ? activeDirectConversation.recipient : undefined;
+      return member?.displayName ?? member?.username ?? friend?.user.displayName ?? friend?.user.username
+        ?? directRecipient?.displayName ?? directRecipient?.username ?? typingUser.username;
     });
     return typingSummary(names);
-  }, [members.data, typingUsers]);
+  }, [activeDirectConversation, friends.data, members.data, typingUsers]);
 
   useEffect(() => {
     if (searchEnabled) return;
@@ -231,10 +303,17 @@ export function ChatShell() {
       list.scrollTop = list.scrollHeight;
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [channelId, lastRenderedMessageId, renderedMessages.length, searchEnabled]);
+  }, [activeView, channelId, directConversationId, lastRenderedMessageId, renderedMessages.length, searchEnabled]);
 
   useEffect(() => {
-    if (!channelId || !serverId) return;
+    if (activeView !== 'direct' || !directConversationId || directMessages.isLoading) return;
+    api.patch(`/direct-conversations/${directConversationId}/read`).then(() => {
+      queryClient.invalidateQueries({ queryKey: ['direct-conversations'] });
+    }).catch(() => undefined);
+  }, [activeView, directConversationId, directMessages.isLoading, lastRenderedMessageId]);
+
+  useEffect(() => {
+    if (activeView !== 'server' || !channelId || !serverId) return;
     const client = stompClient();
     const disposers: Array<() => void> = [];
     const subscribe = () => {
@@ -296,7 +375,7 @@ export function ChatShell() {
           }).unsubscribe
       );
       if (typingStartedRef.current) {
-        publishTyping(true, channelId, false);
+        publishTyping(true, { type: 'server', id: channelId }, false);
       }
     };
     if (client.connected) {
@@ -310,12 +389,84 @@ export function ChatShell() {
       typingUserTimersRef.current = {};
       setTypingUsers({});
     };
-  }, [channelId, serverId, auth.user?.id]);
+  }, [activeView, channelId, serverId, auth.user?.id]);
+
+  useEffect(() => {
+    if (activeView !== 'direct' || !directConversationId) return;
+    const client = stompClient();
+    const disposers: Array<() => void> = [];
+    const subscribe = () => {
+      disposers.push(
+          client.subscribe(`/topic/direct-conversations/${directConversationId}/messages`, (frame) => {
+            const event = JSON.parse(frame.body) as WebSocketEvent<Message | { messageId: string }>;
+            const eventConversationId = event.conversationId ?? directConversationId;
+            if (event.eventType === 'DIRECT_MESSAGE_CREATED') {
+              queryClient.setQueryData<Message[]>(['direct-messages', eventConversationId], (old) => upsertMessage(old, event.data as Message));
+              queryClient.invalidateQueries({ queryKey: ['direct-conversations'] });
+            } else if (event.eventType === 'DIRECT_MESSAGE_UPDATED' || event.eventType === 'DIRECT_REACTION_UPDATED') {
+              queryClient.setQueryData<Message[]>(['direct-messages', eventConversationId], (old) => upsertMessage(old, event.data as Message));
+              queryClient.invalidateQueries({ queryKey: ['direct-conversations'] });
+            } else if (event.eventType === 'DIRECT_MESSAGE_DELETED') {
+              queryClient.setQueryData<Message[]>(['direct-messages', eventConversationId], (old) => removeMessage(old, (event.data as { messageId: string }).messageId));
+              queryClient.invalidateQueries({ queryKey: ['direct-conversations'] });
+            } else {
+              queryClient.invalidateQueries({ queryKey: ['direct-messages', eventConversationId] });
+              queryClient.invalidateQueries({ queryKey: ['direct-conversations'] });
+            }
+          }).unsubscribe
+      );
+      disposers.push(
+          client.subscribe(`/topic/direct-conversations/${directConversationId}/typing`, (frame) => {
+            const event = JSON.parse(frame.body) as WebSocketEvent<TypingPayload>;
+            const typing = event.data;
+            if (!typing?.userId || typing.userId === auth.user?.id) return;
+
+            window.clearTimeout(typingUserTimersRef.current[typing.userId]);
+
+            if (typing.typing) {
+              setTypingUsers((current) => ({
+                ...current,
+                [typing.userId]: { userId: typing.userId, username: typing.username }
+              }));
+              typingUserTimersRef.current[typing.userId] = window.setTimeout(() => {
+                setTypingUsers((current) => {
+                  const next = { ...current };
+                  delete next[typing.userId];
+                  return next;
+                });
+                delete typingUserTimersRef.current[typing.userId];
+              }, 5000);
+            } else {
+              setTypingUsers((current) => {
+                const next = { ...current };
+                delete next[typing.userId];
+                return next;
+              });
+              delete typingUserTimersRef.current[typing.userId];
+            }
+          }).unsubscribe
+      );
+      if (typingStartedRef.current) {
+        publishTyping(true, { type: 'direct', id: directConversationId }, false);
+      }
+    };
+    if (client.connected) {
+      subscribe();
+    } else {
+      client.onConnect = subscribe;
+    }
+    return () => {
+      disposers.forEach((dispose) => dispose());
+      Object.values(typingUserTimersRef.current).forEach((timer) => window.clearTimeout(timer));
+      typingUserTimersRef.current = {};
+      setTypingUsers({});
+    };
+  }, [activeView, directConversationId, auth.user?.id]);
 
   useEffect(() => {
     setTypingUsers({});
-    return () => stopTyping(channelId);
-  }, [channelId]);
+    return () => stopTyping();
+  }, [activeView, channelId, directConversationId]);
 
   const createServer = useMutation({
     mutationFn: () => unwrap(api.post<ApiResponse<Server>>('/servers', { name: serverName.trim() })),
@@ -325,6 +476,7 @@ export function ChatShell() {
       queryClient.invalidateQueries({ queryKey: ['servers'] });
       setServerId(server.id);
       setChannelId(server.defaultChannelId);
+      setActiveView('server');
     }
   });
 
@@ -333,6 +485,7 @@ export function ChatShell() {
     onSuccess: () => {
       setServerId(undefined);
       setChannelId(undefined);
+      setActiveView('home');
       setServerMenuOpen(false);
       queryClient.invalidateQueries({ queryKey: ['servers'] });
     },
@@ -346,6 +499,7 @@ export function ChatShell() {
     onSuccess: () => {
       setServerId(undefined);
       setChannelId(undefined);
+      setActiveView('home');
       setServerMenuOpen(false);
       queryClient.invalidateQueries({ queryKey: ['servers'] });
     },
@@ -401,6 +555,7 @@ export function ChatShell() {
       setModal(null);
       queryClient.invalidateQueries({ queryKey: ['channels', serverId] });
       setChannelId(channel.id);
+      setActiveView('server');
     }
   });
 
@@ -425,9 +580,9 @@ export function ChatShell() {
   });
 
   const sendMessage = useMutation({
-    mutationFn: ({ channelId, content, clientRequestId, attachments }: SendMessageVariables) =>
+    mutationFn: ({ target, content, clientRequestId, attachments }: SendMessageVariables) =>
         unwrap(
-            api.post<ApiResponse<Message>>(`/channels/${channelId}/messages`, {
+            api.post<ApiResponse<Message>>(target.type === 'direct' ? `/direct-conversations/${target.id}/messages` : `/channels/${target.id}/messages`, {
               content,
               attachments, // <-- Thay vì truyền mảng [] rỗng, truyền dữ liệu file ở đây
               clientRequestId
@@ -435,7 +590,10 @@ export function ChatShell() {
         ),
     onMutate: () => setMessage(''),
     onSuccess: (created, variables) => {
-      queryClient.setQueryData<Message[]>(['messages', variables.channelId], (old) => upsertMessage(old, created));
+      queryClient.setQueryData<Message[]>(messageQueryKey(variables.target), (old) => upsertMessage(old, created));
+      if (variables.target.type === 'direct') {
+        queryClient.invalidateQueries({ queryKey: ['direct-conversations'] });
+      }
       setChatAttachments([]); // <-- Xóa danh sách file đính kèm tạm thời sau khi gửi thành công
     }
   });
@@ -482,7 +640,9 @@ export function ChatShell() {
             })
         ),
     onSuccess: (updatedMessage) => {
-      queryClient.setQueryData<Message[]>(['messages', channelId], (old) => upsertMessage(old, updatedMessage));
+      if (activeMessageCacheKey) {
+        queryClient.setQueryData<Message[]>(activeMessageCacheKey, (old) => upsertMessage(old, updatedMessage));
+      }
       setEditingMessageId(null);
       setEditContent('');
     },
@@ -496,7 +656,12 @@ export function ChatShell() {
     mutationFn: (messageId: string) =>
         unwrap(api.delete<ApiResponse<{ message: string }>>(`/messages/${messageId}`)),
     onSuccess: (_, messageId) => {
-      queryClient.setQueryData<Message[]>(['messages', channelId], (old) => removeMessage(old, messageId));
+      if (activeMessageCacheKey) {
+        queryClient.setQueryData<Message[]>(activeMessageCacheKey, (old) => removeMessage(old, messageId));
+      }
+      if (activeView === 'direct') {
+        queryClient.invalidateQueries({ queryKey: ['direct-conversations'] });
+      }
     },
     onError: (error: any) => {
       alert(error.response?.data?.error?.message ?? 'Không thể xóa tin nhắn.');
@@ -511,7 +676,9 @@ export function ChatShell() {
           : unwrap(api.put<ApiResponse<Message>>(path));
     },
     onSuccess: (updatedMessage, variables) => {
-      queryClient.setQueryData<Message[]>(['messages', channelId], (old) => upsertMessage(old, updatedMessage));
+      if (activeMessageCacheKey) {
+        queryClient.setQueryData<Message[]>(activeMessageCacheKey, (old) => upsertMessage(old, updatedMessage));
+      }
     },
     onError: (error: any) => {
       alert(error.response?.data?.error?.message ?? 'Không thể thao tác cảm xúc.');
@@ -528,6 +695,7 @@ export function ChatShell() {
       queryClient.invalidateQueries({ queryKey: ['servers'] });
       setServerId(server.id);
       setChannelId(server.defaultChannelId);
+      setActiveView('server');
     },
     onError: (error: any) => {
       const errorCode = error?.response?.data?.error?.code;
@@ -574,6 +742,7 @@ export function ChatShell() {
       queryClient.invalidateQueries({ queryKey: ['servers'] });
       setServerId(server.id);
       setChannelId(server.defaultChannelId);
+      setActiveView('server');
     }
   });
 
@@ -621,6 +790,63 @@ export function ChatShell() {
     }
   });
 
+  const sendFriendRequest = useMutation({
+    mutationFn: () => unwrap(api.post<ApiResponse<FriendRequest>>('/friends/requests', { username: friendUsername.trim() })),
+    onMutate: () => setFriendError(''),
+    onSuccess: () => {
+      setFriendUsername('');
+      queryClient.invalidateQueries({ queryKey: ['friend-requests'] });
+    },
+    onError: (error: any) => {
+      setFriendError(error.response?.data?.error?.message ?? 'Could not send friend request.');
+    }
+  });
+
+  const acceptFriendRequest = useMutation({
+    mutationFn: (requestId: string) => unwrap(api.post<ApiResponse<Friend>>(`/friends/requests/${requestId}/accept`)),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['friends'] });
+      queryClient.invalidateQueries({ queryKey: ['friend-requests'] });
+    }
+  });
+
+  const rejectFriendRequest = useMutation({
+    mutationFn: (requestId: string) => unwrap(api.post<ApiResponse<{ message: string }>>(`/friends/requests/${requestId}/reject`)),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['friend-requests'] });
+    }
+  });
+
+  const removeFriend = useMutation({
+    mutationFn: (userId: string) => unwrap(api.delete<ApiResponse<{ message: string }>>(`/friends/${userId}`)),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['friends'] });
+      queryClient.invalidateQueries({ queryKey: ['direct-conversations'] });
+      if (activeView === 'direct') {
+        setActiveView('home');
+        setDirectConversationId(undefined);
+      }
+    }
+  });
+
+  const openDirectConversation = useMutation({
+    mutationFn: (userId: string) => unwrap(api.post<ApiResponse<DirectConversation>>('/direct-conversations', { userId })),
+    onSuccess: (conversation) => {
+      queryClient.setQueryData<DirectConversation[]>(['direct-conversations'], (old = []) => {
+        const exists = old.some((item) => item.id === conversation.id);
+        return exists ? old.map((item) => (item.id === conversation.id ? conversation : item)) : [conversation, ...old];
+      });
+      setActiveView('direct');
+      setDirectConversationId(conversation.id);
+      setServerMenuOpen(false);
+      setNotificationOpen(false);
+      setMessageSearch('');
+    },
+    onError: (error: any) => {
+      alert(error.response?.data?.error?.message ?? 'Could not open direct message.');
+    }
+  });
+
   const updateProfile = useMutation({
     mutationFn: () =>
         unwrap(
@@ -638,6 +864,8 @@ export function ChatShell() {
       }
       queryClient.setQueryData<CurrentUser>(['profile'], user);
       queryClient.invalidateQueries({ queryKey: ['members'] });
+      queryClient.invalidateQueries({ queryKey: ['friends'] });
+      queryClient.invalidateQueries({ queryKey: ['direct-conversations'] });
       setModal(null);
     },
     onError: (error: any) => {
@@ -725,51 +953,79 @@ export function ChatShell() {
   }
 
   function selectServer(server: Server) {
+    stopTyping();
+    setActiveView('server');
     setServerId(server.id);
     setChannelId(server.defaultChannelId);
+    setDirectConversationId(undefined);
     setServerMenuOpen(false);
     setNotificationOpen(false);
   }
 
+  function selectHome() {
+    stopTyping();
+    setActiveView('home');
+    setDirectConversationId(undefined);
+    setServerMenuOpen(false);
+    setNotificationOpen(false);
+    setMessageSearch('');
+  }
+
+  function selectDirectConversation(conversation: DirectConversation) {
+    stopTyping();
+    setActiveView('direct');
+    setDirectConversationId(conversation.id);
+    setServerMenuOpen(false);
+    setNotificationOpen(false);
+    setMessageSearch('');
+  }
+
   async function logout() {
-    stopTyping(channelId);
+    stopTyping();
     await api.post('/auth/logout').catch(() => undefined);
     disconnectStomp();
     auth.clear();
   }
 
-  function publishTyping(isTyping: boolean, targetChannelId = channelId, ensureActive = true) {
-    if (!targetChannelId) return;
+  function publishTyping(isTyping: boolean, target = activeMessageTarget, ensureActive = true) {
+    if (!target) return;
     const client = ensureActive ? stompClient() : currentStompClient();
     if (!client?.connected) return;
     client.publish({
-      destination: `/app/channels/${targetChannelId}/typing`,
+      destination: target.type === 'direct' ? `/app/direct-conversations/${target.id}/typing` : `/app/channels/${target.id}/typing`,
       body: JSON.stringify({ typing: isTyping })
     });
   }
 
-  function stopTyping(targetChannelId = channelId) {
+  function stopTyping(target = typingTargetRef.current ?? activeMessageTarget) {
     if (typingStopTimerRef.current) {
       window.clearTimeout(typingStopTimerRef.current);
       typingStopTimerRef.current = undefined;
     }
     if (!typingStartedRef.current) return;
     typingStartedRef.current = false;
-    publishTyping(false, targetChannelId, false);
+    publishTyping(false, target, false);
+    typingTargetRef.current = undefined;
   }
 
   function startTyping() {
-    if (!channelId) return;
+    const target = activeMessageTarget;
+    if (!target) return;
+    const previous = typingTargetRef.current;
+    if (previous && (previous.type !== target.type || previous.id !== target.id)) {
+      stopTyping(previous);
+    }
     if (!typingStartedRef.current) {
       typingStartedRef.current = true;
-      publishTyping(true, channelId);
+      typingTargetRef.current = target;
+      publishTyping(true, target);
     }
     if (typingStopTimerRef.current) {
       window.clearTimeout(typingStopTimerRef.current);
     }
-    const targetChannelId = channelId;
+    const timerTarget = target;
     typingStopTimerRef.current = window.setTimeout(() => {
-      stopTyping(targetChannelId);
+      stopTyping(timerTarget);
     }, 2000);
   }
 
@@ -778,7 +1034,7 @@ export function ChatShell() {
     if (value.trim()) {
       startTyping();
     } else {
-      stopTyping(channelId);
+      stopTyping();
     }
   }
 
@@ -786,10 +1042,10 @@ export function ChatShell() {
     event.preventDefault();
     const content = message.trim();
     // Chấp nhận gửi nếu có nội dung chữ HOẶC có file đính kèm
-    if ((content || chatAttachments.length > 0) && channelId) {
+    if ((content || chatAttachments.length > 0) && activeMessageTarget) {
       setMessageSearch('');
       sendMessage.mutate({
-        channelId,
+        target: activeMessageTarget,
         content,
         clientRequestId: crypto.randomUUID(),
         attachments: chatAttachments // <-- Gửi kèm danh sách metadata tệp tin lên Backend
@@ -802,8 +1058,8 @@ export function ChatShell() {
   return (
       <main className="discord-shell">
         <aside className="server-rail">
-          <button className="server-pill home" title="Profile" type="button" onClick={() => openModal('profile')}>
-            {auth.user?.avatarUrl ? <img src={auth.user.avatarUrl} alt="" /> : initialOf(auth.user?.username)}
+          <button className={`server-pill home ${activeView === 'home' || activeView === 'direct' ? 'active' : ''}`} title="Friends" type="button" onClick={selectHome}>
+            <Home size={24} />
           </button>
           <span className="server-divider" />
 
@@ -811,7 +1067,7 @@ export function ChatShell() {
             {servers.data?.map((server) => (
                 <button
                     key={server.id}
-                    className={`server-pill ${server.id === serverId ? 'active' : ''}`}
+                    className={`server-pill ${activeView === 'server' && server.id === serverId ? 'active' : ''}`}
                     title={server.name}
                     type="button"
                     onClick={() => selectServer(server)}
@@ -830,6 +1086,8 @@ export function ChatShell() {
         </aside>
 
         <aside className="channel-column">
+          {activeView === 'server' ? (
+            <>
           <header className="server-bar">
             <button className="server-name-button" type="button" onClick={() => setServerMenuOpen((open) => !open)}>
               <span>{activeServer?.name ?? 'Mini Discord'}</span>
@@ -906,7 +1164,7 @@ export function ChatShell() {
 
             {channels.data?.map((channel) => (
                 <div key={channel.id} className={`channel-row ${channel.id === channelId ? 'active' : ''}`}>
-                  <button className="channel-select" type="button" onClick={() => setChannelId(channel.id)}>
+                  <button className="channel-select" type="button" onClick={() => { setActiveView('server'); setChannelId(channel.id); }}>
                 <span className="channel-main">
                   <Hash size={20} />
                   <span>{channel.name}</span>
@@ -927,6 +1185,50 @@ export function ChatShell() {
                 </div>
             ))}
           </nav>
+            </>
+          ) : (
+            <>
+              <header className="server-bar">
+                <button className="server-name-button" type="button" onClick={selectHome}>
+                  <span>Friends</span>
+                  <MessageCircle size={19} />
+                </button>
+              </header>
+
+              <nav className="channel-list">
+                <button className={`home-nav-row ${activeView === 'home' ? 'active' : ''}`} type="button" onClick={selectHome}>
+                  <Users size={18} />
+                  <span>Friends</span>
+                  {incomingFriendRequests.length > 0 && (
+                    <small>{incomingFriendRequests.length}</small>
+                  )}
+                </button>
+
+                <div className="channel-category direct-category">
+                  <span>Direct messages</span>
+                </div>
+
+                {directConversations.data?.length ? (
+                  directConversations.data.map((conversation) => (
+                    <button
+                      key={conversation.id}
+                      className={`dm-row ${conversation.id === directConversationId ? 'active' : ''}`}
+                      type="button"
+                      onClick={() => selectDirectConversation(conversation)}
+                    >
+                      <div className="small-avatar">
+                        {conversation.recipient.avatarUrl ? <img src={conversation.recipient.avatarUrl} alt="" /> : initialOf(conversation.recipient.username)}
+                      </div>
+                      <span>{conversation.recipient.displayName ?? conversation.recipient.username}</span>
+                      {conversation.unreadCount > 0 && <small>{conversation.unreadCount}</small>}
+                    </button>
+                  ))
+                ) : (
+                  <p className="empty-copy dm-empty">No direct messages</p>
+                )}
+              </nav>
+            </>
+          )}
 
           <footer className="account-panel">
             <button className="account-user" type="button" onClick={() => openModal('profile')}>
@@ -942,12 +1244,32 @@ export function ChatShell() {
           </footer>
         </aside>
 
-        <section className="chat-panel">
+        <section className={`chat-panel ${activeMessageTarget ? '' : 'home-panel'}`}>
           <header className="channel-header">
             <div className="channel-title">
-              <Hash size={23} />
-              <strong>{activeChannel?.name ?? 'general'}</strong>
-              {activeServer && (
+              {activeView === 'direct' ? (
+                  <>
+                    <div className="small-avatar">
+                      {activeDirectConversation?.recipient.avatarUrl
+                        ? <img src={activeDirectConversation.recipient.avatarUrl} alt="" />
+                        : initialOf(activeDirectConversation?.recipient.username)}
+                    </div>
+                    <strong>{activeDirectConversation?.recipient.displayName ?? activeDirectConversation?.recipient.username ?? 'Direct message'}</strong>
+                    <span className="title-separator" />
+                    <span>{activeDirectConversation?.recipient.presenceStatus?.toLowerCase() ?? 'offline'}</span>
+                  </>
+              ) : activeView === 'home' ? (
+                  <>
+                    <Users size={23} />
+                    <strong>Friends</strong>
+                  </>
+              ) : (
+                  <>
+                    <Hash size={23} />
+                    <strong>{activeChannel?.name ?? 'general'}</strong>
+                  </>
+              )}
+              {activeView === 'server' && activeServer && (
                   <>
                     <span className="title-separator" />
                     <span>{activeServer.name}</span>
@@ -962,11 +1284,15 @@ export function ChatShell() {
                     <span className="badge">{notificationCount}</span>
                 )}
               </button>
-              <Users size={20} />
-              <label className="message-search">
-                <input value={messageSearch} onChange={(event) => setMessageSearch(event.target.value)} placeholder="Search" />
-                <Search size={16} />
-              </label>
+              {activeView === 'server' && (
+                  <>
+                    <Users size={20} />
+                    <label className="message-search">
+                      <input value={messageSearch} onChange={(event) => setMessageSearch(event.target.value)} placeholder="Search" />
+                      <Search size={16} />
+                    </label>
+                  </>
+              )}
 
               {notificationOpen && (
                   <div className="notification-popover">
@@ -1012,8 +1338,31 @@ export function ChatShell() {
           </header>
 
           <div className="message-list" ref={messageListRef}>
-            {!messages.isLoading && !searchEnabled && renderedMessages.length === 0 && <div className="message-empty">No messages yet</div>}
-            {!searchEnabled && messages.isError && <div className="message-empty error">Could not load messages</div>}
+            {activeView === 'home' ? (
+              <FriendsHome
+                tab={friendTab}
+                onTabChange={setFriendTab}
+                friends={visibleFriends}
+                incomingRequests={incomingFriendRequests}
+                outgoingRequests={outgoingFriendRequests}
+                username={friendUsername}
+                onUsernameChange={setFriendUsername}
+                error={friendError}
+                isSending={sendFriendRequest.isPending}
+                onSendRequest={() => sendFriendRequest.mutate()}
+                onOpenMessage={(userId) => openDirectConversation.mutate(userId)}
+                onAccept={(requestId) => acceptFriendRequest.mutate(requestId)}
+                onReject={(requestId) => rejectFriendRequest.mutate(requestId)}
+                onRemove={(userId, name) => {
+                  if (window.confirm(`Remove ${name} from friends?`)) {
+                    removeFriend.mutate(userId);
+                  }
+                }}
+              />
+            ) : (
+              <>
+            {!messageLoading && !searchEnabled && renderedMessages.length === 0 && <div className="message-empty">No messages yet</div>}
+            {!searchEnabled && messageError && <div className="message-empty error">Could not load messages</div>}
             {renderedMessages.map((item) => (
                 <article className="message-row" key={item.id}>
                   <div className="message-avatar">
@@ -1187,7 +1536,7 @@ export function ChatShell() {
                             </button>
                         )}
 
-                        {(item.senderId === auth.user?.id || isOwner) && (
+                        {(item.senderId === auth.user?.id || (activeView === 'server' && isOwner)) && (
                             <button
                                 title={item.senderId === auth.user?.id ? "Xóa tin nhắn của tôi" : "Xóa tin nhắn member (Quyền OWNER)"}
                                 type="button"
@@ -1207,8 +1556,12 @@ export function ChatShell() {
                   )}
                 </article>
             ))}
+              </>
+            )}
           </div>
 
+          {activeMessageTarget && (
+            <>
           <div className="typing-indicator" aria-live="polite">
             {typingText}
           </div>
@@ -1270,7 +1623,7 @@ export function ChatShell() {
 
                 <input
                   value={message}
-                  onChange={(event) => setMessage(event.target.value)}
+                  onChange={(event) => handleComposerChange(event.target.value)}
                   placeholder={uploadChatFile.isPending ? "Đang tải tệp đính kèm..." : `Message #${activeChannel?.name ?? ''}`}
                   disabled={uploadChatFile.isPending}
                 />
@@ -1285,9 +1638,13 @@ export function ChatShell() {
               <Send size={20} />
             </button>
           </form>
+            </>
+          )}
         </section>
 
         <aside className="member-column">
+          {activeView === 'server' ? (
+            <>
           <MemberGroup
               title={`Online - ${onlineMembers.length}`}
               members={onlineMembers}
@@ -1321,7 +1678,32 @@ export function ChatShell() {
                 }
               }}
           />
-        </aside>ber
+            </>
+          ) : (
+            <section className="member-group friend-summary">
+              <span>{activeView === 'direct' ? 'Direct message' : 'Friends'}</span>
+              {activeView === 'direct' && activeDirectConversation ? (
+                <div className="profile-card compact-profile">
+                  <div className="profile-avatar">
+                    {activeDirectConversation.recipient.avatarUrl
+                      ? <img src={activeDirectConversation.recipient.avatarUrl} alt="" />
+                      : initialOf(activeDirectConversation.recipient.username)}
+                  </div>
+                  <div>
+                    <strong>{activeDirectConversation.recipient.displayName ?? activeDirectConversation.recipient.username}</strong>
+                    <span>{activeDirectConversation.recipient.customStatus || activeDirectConversation.recipient.presenceStatus.toLowerCase()}</span>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <div className="summary-row"><strong>{friends.data?.length ?? 0}</strong><span>friends</span></div>
+                  <div className="summary-row"><strong>{incomingFriendRequests.length}</strong><span>incoming</span></div>
+                  <div className="summary-row"><strong>{directConversations.data?.length ?? 0}</strong><span>direct messages</span></div>
+                </>
+              )}
+            </section>
+          )}
+        </aside>
         {modal && (
             <div className="modal-backdrop" role="presentation" onMouseDown={closeModal}>
               <div className="modal" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}>
@@ -1537,6 +1919,148 @@ export function ChatShell() {
             </div>
         )}
       </main>
+  );
+}
+
+function FriendsHome({
+  tab,
+  onTabChange,
+  friends,
+  incomingRequests,
+  outgoingRequests,
+  username,
+  onUsernameChange,
+  error,
+  isSending,
+  onSendRequest,
+  onOpenMessage,
+  onAccept,
+  onReject,
+  onRemove
+}: {
+  tab: FriendTab;
+  onTabChange: (tab: FriendTab) => void;
+  friends: Friend[];
+  incomingRequests: FriendRequest[];
+  outgoingRequests: FriendRequest[];
+  username: string;
+  onUsernameChange: (value: string) => void;
+  error?: string;
+  isSending?: boolean;
+  onSendRequest: () => void;
+  onOpenMessage: (userId: string) => void;
+  onAccept: (requestId: string) => void;
+  onReject: (requestId: string) => void;
+  onRemove: (userId: string, name: string) => void;
+}) {
+  return (
+    <div className="friends-home">
+      <div className="friends-tabs">
+        <button className={tab === 'all' ? 'active' : ''} type="button" onClick={() => onTabChange('all')}>All</button>
+        <button className={tab === 'online' ? 'active' : ''} type="button" onClick={() => onTabChange('online')}>Online</button>
+        <button className={tab === 'pending' ? 'active' : ''} type="button" onClick={() => onTabChange('pending')}>
+          Pending
+          {incomingRequests.length > 0 && <small>{incomingRequests.length}</small>}
+        </button>
+        <button className={tab === 'add' ? 'active' : ''} type="button" onClick={() => onTabChange('add')}>Add Friend</button>
+      </div>
+
+      {tab === 'add' && (
+        <form className="add-friend-panel" onSubmit={(event) => { event.preventDefault(); if (username.trim()) onSendRequest(); }}>
+          <label>
+            Add by username
+            <div className="inline-form">
+              <input value={username} onChange={(event) => onUsernameChange(event.target.value)} placeholder="username" autoFocus />
+              <button className="modal-primary" type="submit" disabled={!username.trim() || isSending}>
+                Send
+              </button>
+            </div>
+          </label>
+          {error && <p className="form-error">{error}</p>}
+        </form>
+      )}
+
+      {tab === 'pending' && (
+        <div className="friend-section">
+          <span>Incoming - {incomingRequests.length}</span>
+          {incomingRequests.length === 0 && <p className="empty-copy">No incoming requests</p>}
+          {incomingRequests.map((request) => (
+            <FriendRequestRow key={request.id} request={request} onAccept={onAccept} onReject={onReject} />
+          ))}
+
+          <span>Outgoing - {outgoingRequests.length}</span>
+          {outgoingRequests.length === 0 && <p className="empty-copy">No outgoing requests</p>}
+          {outgoingRequests.map((request) => (
+            <FriendRequestRow key={request.id} request={request} />
+          ))}
+        </div>
+      )}
+
+      {(tab === 'all' || tab === 'online') && (
+        <div className="friend-section">
+          <span>{tab === 'online' ? `Online - ${friends.length}` : `All friends - ${friends.length}`}</span>
+          {friends.length === 0 && <p className="empty-copy">No friends to show</p>}
+          {friends.map((friend) => (
+            <FriendRow
+              key={friend.user.userId}
+              user={friend.user}
+              onOpenMessage={onOpenMessage}
+              onRemove={onRemove}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function FriendRow({ user, onOpenMessage, onRemove }: {
+  user: FriendUser;
+  onOpenMessage: (userId: string) => void;
+  onRemove: (userId: string, name: string) => void;
+}) {
+  const name = user.displayName ?? user.username;
+  return (
+    <article className="friend-row">
+      <div className="small-avatar">{user.avatarUrl ? <img src={user.avatarUrl} alt="" /> : initialOf(user.username)}</div>
+      <div>
+        <strong>{name}</strong>
+        <span>{user.customStatus || user.presenceStatus.toLowerCase()}</span>
+      </div>
+      <button title="Message" type="button" onClick={() => onOpenMessage(user.userId)}>
+        <MessageCircle size={18} />
+      </button>
+      <button title="Remove friend" type="button" onClick={() => onRemove(user.userId, name)}>
+        <UserMinus size={18} />
+      </button>
+    </article>
+  );
+}
+
+function FriendRequestRow({ request, onAccept, onReject }: {
+  request: FriendRequest;
+  onAccept?: (requestId: string) => void;
+  onReject?: (requestId: string) => void;
+}) {
+  const name = request.user.displayName ?? request.user.username;
+  return (
+    <article className="friend-row">
+      <div className="small-avatar">{request.user.avatarUrl ? <img src={request.user.avatarUrl} alt="" /> : initialOf(request.user.username)}</div>
+      <div>
+        <strong>{name}</strong>
+        <span>{request.direction.toLowerCase()}</span>
+      </div>
+      {request.direction === 'INCOMING' && (
+        <>
+          <button title="Accept" type="button" onClick={() => onAccept?.(request.id)}>
+            <Check size={18} />
+          </button>
+          <button title="Reject" type="button" onClick={() => onReject?.(request.id)}>
+            <X size={18} />
+          </button>
+        </>
+      )}
+    </article>
   );
 }
 

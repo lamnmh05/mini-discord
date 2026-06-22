@@ -482,6 +482,65 @@ input:focus {
   color: var(--white);
 }
 
+.home-nav-row,
+.dm-row {
+  min-width: 0;
+  min-height: 42px;
+  border: 0;
+  border-radius: 5px;
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 7px;
+  color: var(--senary);
+  text-align: left;
+  background: transparent;
+}
+
+.home-nav-row {
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+}
+
+.home-nav-row:hover,
+.home-nav-row.active,
+.dm-row:hover,
+.dm-row.active {
+  color: var(--white);
+  background: var(--quinary);
+}
+
+.home-nav-row span,
+.dm-row span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.home-nav-row small,
+.dm-row small,
+.friends-tabs small {
+  min-width: 18px;
+  height: 18px;
+  border-radius: 9px;
+  display: inline-grid;
+  place-items: center;
+  padding: 0 6px;
+  color: var(--white);
+  background: var(--notification);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.direct-category {
+  margin-top: 14px;
+}
+
+.dm-empty {
+  padding: 4px 7px;
+}
+
 
 .account-panel {
   min-width: 0;
@@ -559,6 +618,10 @@ input:focus {
   display: grid;
   grid-template-rows: 46px minmax(0, 1fr) 24px 72px;
   background: var(--primary);
+}
+
+.chat-panel.home-panel {
+  grid-template-rows: 46px minmax(0, 1fr);
 }
 
 .channel-header {
@@ -758,6 +821,113 @@ input:focus {
 
 .message-empty.error {
   color: #ff9a9a;
+}
+
+.friends-home {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 18px 22px;
+}
+
+.friends-tabs {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.friends-tabs button {
+  min-height: 34px;
+  border: 0;
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 12px;
+  color: #d8dbe2;
+  background: transparent;
+}
+
+.friends-tabs button:hover,
+.friends-tabs button.active {
+  color: var(--white);
+  background: var(--quinary);
+}
+
+.friend-section {
+  display: grid;
+  gap: 8px;
+}
+
+.friend-section > span {
+  color: var(--gray);
+  text-transform: uppercase;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.friend-row {
+  min-width: 0;
+  min-height: 56px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) 36px 36px;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 4px;
+}
+
+.friend-row:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.friend-row strong,
+.friend-row span {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.friend-row strong {
+  font-size: 15px;
+}
+
+.friend-row span {
+  margin-top: 2px;
+  color: var(--gray);
+  font-size: 13px;
+}
+
+.friend-row button {
+  width: 34px;
+  height: 34px;
+  border: 0;
+  border-radius: 17px;
+  display: grid;
+  place-items: center;
+  color: var(--gray);
+  background: var(--secondary);
+}
+
+.friend-row button:hover {
+  color: var(--white);
+  background: var(--discord);
+}
+
+.add-friend-panel {
+  max-width: 560px;
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.12);
 }
 
 .message-row {
@@ -1075,6 +1245,33 @@ input:focus {
 .kick-button:hover {
   color: var(--notification);
   background: rgba(248, 74, 75, 0.15);
+}
+
+.friend-summary {
+  gap: 10px;
+}
+
+.summary-row {
+  min-height: 48px;
+  border-radius: 5px;
+  display: grid;
+  gap: 2px;
+  padding: 9px 10px;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.summary-row strong {
+  font-size: 18px;
+}
+
+.summary-row span {
+  color: var(--gray);
+  font-size: 12px;
+}
+
+.compact-profile {
+  grid-template-columns: 64px minmax(0, 1fr);
+  padding: 10px;
 }
 
 

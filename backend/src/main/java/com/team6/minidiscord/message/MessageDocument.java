@@ -12,8 +12,10 @@ import java.util.List;
 public class MessageDocument {
     @Id
     public ObjectId id;
+    public MessageScope scope = MessageScope.SERVER;
     public ObjectId serverId;
     public ObjectId channelId;
+    public ObjectId conversationId;
     public ObjectId senderId;
     public String content;
     public MessageType messageType;

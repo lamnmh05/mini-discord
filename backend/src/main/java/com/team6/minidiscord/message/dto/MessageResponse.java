@@ -7,8 +7,10 @@ import java.util.List;
 
 public record MessageResponse(
         String id,
+        String scope,
         String serverId,
         String channelId,
+        String conversationId,
         String senderId,
         SenderSnapshotResponse senderSnapshot,
         String content,
