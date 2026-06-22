@@ -1715,10 +1715,6 @@ export function ChatShell() {
                         <input value={profileCustomStatus} onChange={(event) => setProfileCustomStatus(event.target.value)} maxLength={180} placeholder="Status" />
                       </label>
                       {avatarUploadError && <p className="form-error">{avatarUploadError}</p>}
-                      <div className="profile-meta">
-                        <span>Email</span>
-                        <strong>{auth.user?.email}</strong>
-                      </div>
                       {profileError && <p className="form-error">{profileError}</p>}
                       <button className="modal-primary" disabled={updateProfile.isPending || uploadAvatar.isPending || currentProfile.isLoading}>
                         {updateProfile.isPending ? 'Saving' : 'Save changes'}
