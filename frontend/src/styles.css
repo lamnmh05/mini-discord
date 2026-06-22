@@ -1439,9 +1439,23 @@ input:focus {
   font-size: 13px;
 }
 
+.profile-avatar-input {
+  display: none;
+}
+
+.editable-avatar:hover {
+  box-shadow: 0 0 0 2px var(--discord);
+  filter: brightness(1.08);
+}
+
+.editable-avatar:disabled {
+  opacity: 0.72;
+  cursor: wait;
+}
+
 .profile-meta {
   display: grid;
-  grid-template-columns: 80px minmax(0, 1fr);
+  grid-template-columns: 56px minmax(0, 1fr);
   gap: 8px 12px;
   border-radius: 6px;
   padding: 10px 12px;

@@ -1682,67 +1682,45 @@ export function ChatShell() {
                 )}
 
                 {modal === 'profile' && (
-                    <form onSubmit={(event) => { event.preventDefault(); if (profileUsername.trim()) updateProfile.mutate(); }}>
+                    <form onSubmit={(event) => { event.preventDefault(); updateProfile.mutate(); }}>
                       <h2>Profile</h2>
                       <div className="profile-card">
                         <button
                             type="button"
-                            className="profile-avatar"
+                            className="profile-avatar editable-avatar"
                             onClick={() => avatarInputRef.current?.click()}
                             title="Thay đổi Avatar"
+                            disabled={uploadAvatar.isPending}
                         >
                           {profileAvatarUrl.trim() ? <img src={profileAvatarUrl.trim()} alt="" /> : initialOf(profileUsername || auth.user?.username)}
                         </button>
+                        <input
+                            ref={avatarInputRef}
+                            className="profile-avatar-input"
+                            type="file"
+                            accept="image/png,image/jpeg,image/gif,image/webp"
+                            onChange={(event) => uploadAvatarFile(event.currentTarget.files?.[0])}
+                        />
                         <div>
-                          <strong>{profileDisplayName.trim() || profileUsername || auth.user?.username}</strong>
+                          <strong>{profileDisplayName.trim() || auth.user?.email || 'Profile'}</strong>
                           <span>{profileCustomStatus.trim() || auth.user?.email}</span>
                         </div>
                       </div>
                       <label>
-                        Username
-                        <input
-                            value={profileUsername}
-                            onChange={(event) => setProfileUsername(event.target.value)}
-                            minLength={3}
-                            maxLength={32}
-                            pattern="^[a-zA-Z0-9_.-]+$"
-                            required
-                            autoFocus
-                        />
-                      </label>
-                      <label>
                         Display name
-                        <input value={profileDisplayName} onChange={(event) => setProfileDisplayName(event.target.value)} maxLength={80} placeholder="Display name" />
+                        <input value={profileDisplayName} onChange={(event) => setProfileDisplayName(event.target.value)} maxLength={80} placeholder="Display name" autoFocus />
                       </label>
                       <label>
                         Custom status
                         <input value={profileCustomStatus} onChange={(event) => setProfileCustomStatus(event.target.value)} maxLength={180} placeholder="Status" />
                       </label>
-                      <label>
-                        Avatar URL
-                        <input value={profileAvatarUrl} onChange={(event) => setProfileAvatarUrl(event.target.value)} placeholder="https://..." />
-                      </label>
-                      <div className="avatar-upload-row">
-                        <input
-                            ref={avatarInputRef}
-                            type="file"
-                            accept="image/png,image/jpeg,image/gif,image/webp"
-                            onChange={(event) => uploadAvatarFile(event.currentTarget.files?.[0])}
-                        />
-                        <button className="secondary-button" type="button" onClick={() => avatarInputRef.current?.click()} disabled={uploadAvatar.isPending}>
-                          {uploadAvatar.isPending ? 'Uploading' : 'Upload image'}
-                        </button>
-                        <span>{uploadAvatar.data?.originalName ?? 'PNG, JPG, GIF, WebP up to 10 MB'}</span>
-                      </div>
                       {avatarUploadError && <p className="form-error">{avatarUploadError}</p>}
                       <div className="profile-meta">
                         <span>Email</span>
                         <strong>{auth.user?.email}</strong>
-                        <span>Account</span>
-                        <strong>{auth.user?.accountStatus}</strong>
                       </div>
                       {profileError && <p className="form-error">{profileError}</p>}
-                      <button className="modal-primary" disabled={!profileUsername.trim() || updateProfile.isPending || currentProfile.isLoading}>
+                      <button className="modal-primary" disabled={updateProfile.isPending || uploadAvatar.isPending || currentProfile.isLoading}>
                         {updateProfile.isPending ? 'Saving' : 'Save changes'}
                       </button>
                     </form>
