@@ -12,12 +12,10 @@ import {
   Pencil,
   Plus,
   Search,
-  Send,
   Smile,
   Settings,
   Trash2,
   UserPlus,
-  UserMinus,
   Users,
   X
 } from 'lucide-react';
@@ -25,6 +23,11 @@ import { api, unwrap } from '../../shared/api/client';
 import { currentStompClient, disconnectStomp, stompClient } from '../../shared/api/ws';
 import { queryClient } from '../../app/queryClient';
 import { useAuthStore } from '../../store/authStore';
+import { FriendsHome } from './components/FriendsHome';
+import { MemberGroup } from './components/MemberGroup';
+import { MessageComposer } from './components/MessageComposer';
+import { formatTime, initialOf, messageQueryKey, removeMessage, sortMessages, typingSummary, upsertMessage } from './chatUtils';
+import type { ActiveView, FriendTab, MessageTarget, SendMessageVariables, TypingPayload, TypingUser } from './types';
 import type {
   ApiResponse,
   Attachment,
@@ -33,7 +36,6 @@ import type {
   DirectConversation,
   Friend,
   FriendRequest,
-  FriendUser,
   InviteCode,
   Member,
   Message,
@@ -44,51 +46,6 @@ import type {
 } from '../../shared/types';
 
 type ModalMode = 'profile' | 'create-server' | 'join-server' | 'edit-server'| 'create-channel' | 'invite-user' | 'invite-code' | 'edit-channel' | null;
-
-type ActiveView = 'home' | 'server' | 'direct';
-type FriendTab = 'all' | 'online' | 'pending' | 'add';
-type MessageTarget = { type: 'server'; id: string } | { type: 'direct'; id: string };
-type SendMessageVariables = { target: MessageTarget; content: string; clientRequestId: string; attachments: Attachment[] };
-
-type TypingPayload = { userId: string; username: string; typing: boolean };
-type TypingUser = { userId: string; username: string };
-
-function initialOf(value?: string) {
-  return value?.trim().slice(0, 1).toUpperCase() || '?';
-}
-
-function formatTime(value: string) {
-  return new Date(value).toLocaleString();
-}
-
-function messageTime(message: Message) {
-  return new Date(message.createdAt).getTime();
-}
-
-function sortMessages(messages: Message[]) {
-  return [...messages].sort((left, right) => messageTime(left) - messageTime(right));
-}
-
-function upsertMessage(messages: Message[] | undefined, next: Message) {
-  const current = messages ?? [];
-  const exists = current.some((item) => item.id === next.id);
-  return exists ? current.map((item) => (item.id === next.id ? next : item)) : [next, ...current];
-}
-
-function messageQueryKey(target: MessageTarget) {
-  return target.type === 'direct' ? ['direct-messages', target.id] : ['messages', target.id];
-}
-
-function removeMessage(messages: Message[] | undefined, messageId: string) {
-  return (messages ?? []).filter((item) => item.id !== messageId);
-}
-
-function typingSummary(names: string[]) {
-  if (names.length === 0) return '';
-  if (names.length === 1) return `${names[0]} is typing...`;
-  if (names.length === 2) return `${names[0]} and ${names[1]} are typing...`;
-  return `${names[0]}, ${names[1]} and ${names.length - 2} others are typing...`;
-}
 
 export function ChatShell() {
   const auth = useAuthStore();
@@ -136,7 +93,6 @@ export function ChatShell() {
   const serverIconInputRef = useRef<HTMLInputElement>(null);
 
   const [chatAttachments, setChatAttachments] = useState<Attachment[]>([]);
-  const chatFileInputRef = useRef<HTMLInputElement>(null);
 
 
   const servers = useQuery({
@@ -629,7 +585,6 @@ export function ChatShell() {
       return;
     }
     uploadChatFile.mutate(file);
-    if (chatFileInputRef.current) chatFileInputRef.current.value = ''; // Reset input
   }
 
   const editMessage = useMutation({
@@ -1566,78 +1521,17 @@ export function ChatShell() {
             {typingText}
           </div>
 
-          <form className="composer" onSubmit={submitMessage}>
-            <div style={{ display: 'flex', flexDirection: 'column', width: '100%' }}>
-
-              {/* VÙNG CHỨA CỐ ĐỊNH: Giúp giữ vị trí của input bên dưới luôn ổn định */}
-              <div className="chat-attachments-wrapper">
-                {chatAttachments.length > 0 && (
-                  <div className="attachments" style={{ marginBottom: '8px', padding: '0 8px' }}>
-                    {chatAttachments.map((file, idx) => (
-                      <span
-                        key={file.storageKey || idx}
-                        style={{
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: '8px',
-                          background: 'var(--tertiary)',
-                          padding: '4px 8px',
-                          borderRadius: '4px',
-                          fontSize: '13px'
-                        }}
-                      >
-                        <span style={{ maxWidth: '160px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--white)' }}>
-                          {file.originalName}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => setChatAttachments(prev => prev.filter((_, i) => i !== idx))}
-                          style={{ border: 0, background: 'transparent', color: '#fa777c', padding: 0, display: 'flex' }}
-                        >
-                          <X size={14} />
-                        </button>
-                      </span>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              {/* HỘP NHẬP LIỆU: Luôn là con thứ hai cố định, không bao giờ bị remount */}
-              <div className="composer-input" style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <input
-                  ref={chatFileInputRef}
-                  type="file"
-                  style={{ display: 'none' }}
-                  onChange={(event) => handleChatFileChange(event.currentTarget.files?.[0])}
-                />
-
-                <button
-                  type="button"
-                  title="Upload file"
-                  onClick={() => chatFileInputRef.current?.click()}
-                  disabled={uploadChatFile.isPending}
-                  style={{ border: 0, background: 'transparent', color: 'var(--gray)', padding: 0, display: 'flex', alignItems: 'center' }}
-                >
-                  <Plus size={20} style={{ background: 'var(--primary)', borderRadius: '50%', padding: '2px', color: 'var(--white)' }} />
-                </button>
-
-                <input
-                  value={message}
-                  onChange={(event) => handleComposerChange(event.target.value)}
-                  placeholder={uploadChatFile.isPending ? "Đang tải tệp đính kèm..." : `Message #${activeChannel?.name ?? ''}`}
-                  disabled={uploadChatFile.isPending}
-                />
-              </div>
-            </div>
-
-            <button
-              title="Send"
-              type="submit"
-              disabled={(!message.trim() && chatAttachments.length === 0) || uploadChatFile.isPending}
-            >
-              <Send size={20} />
-            </button>
-          </form>
+          <MessageComposer
+            value={message}
+            attachments={chatAttachments}
+            placeholder={activeView === 'direct' ? `Message @${activeDirectConversation?.recipient.username ?? ''}` : `Message #${activeChannel?.name ?? ''}`}
+            uploadPending={uploadChatFile.isPending}
+            sendDisabled={(!message.trim() && chatAttachments.length === 0) || uploadChatFile.isPending}
+            onChange={handleComposerChange}
+            onSubmit={submitMessage}
+            onFileSelected={handleChatFileChange}
+            onRemoveAttachment={(index) => setChatAttachments((current) => current.filter((_, itemIndex) => itemIndex !== index))}
+          />
             </>
           )}
         </section>
@@ -1922,199 +1816,3 @@ export function ChatShell() {
   );
 }
 
-function FriendsHome({
-  tab,
-  onTabChange,
-  friends,
-  incomingRequests,
-  outgoingRequests,
-  username,
-  onUsernameChange,
-  error,
-  isSending,
-  onSendRequest,
-  onOpenMessage,
-  onAccept,
-  onReject,
-  onRemove
-}: {
-  tab: FriendTab;
-  onTabChange: (tab: FriendTab) => void;
-  friends: Friend[];
-  incomingRequests: FriendRequest[];
-  outgoingRequests: FriendRequest[];
-  username: string;
-  onUsernameChange: (value: string) => void;
-  error?: string;
-  isSending?: boolean;
-  onSendRequest: () => void;
-  onOpenMessage: (userId: string) => void;
-  onAccept: (requestId: string) => void;
-  onReject: (requestId: string) => void;
-  onRemove: (userId: string, name: string) => void;
-}) {
-  return (
-    <div className="friends-home">
-      <div className="friends-tabs">
-        <button className={tab === 'all' ? 'active' : ''} type="button" onClick={() => onTabChange('all')}>All</button>
-        <button className={tab === 'online' ? 'active' : ''} type="button" onClick={() => onTabChange('online')}>Online</button>
-        <button className={tab === 'pending' ? 'active' : ''} type="button" onClick={() => onTabChange('pending')}>
-          Pending
-          {incomingRequests.length > 0 && <small>{incomingRequests.length}</small>}
-        </button>
-        <button className={tab === 'add' ? 'active' : ''} type="button" onClick={() => onTabChange('add')}>Add Friend</button>
-      </div>
-
-      {tab === 'add' && (
-        <form className="add-friend-panel" onSubmit={(event) => { event.preventDefault(); if (username.trim()) onSendRequest(); }}>
-          <label>
-            Add by username
-            <div className="inline-form">
-              <input value={username} onChange={(event) => onUsernameChange(event.target.value)} placeholder="username" autoFocus />
-              <button className="modal-primary" type="submit" disabled={!username.trim() || isSending}>
-                Send
-              </button>
-            </div>
-          </label>
-          {error && <p className="form-error">{error}</p>}
-        </form>
-      )}
-
-      {tab === 'pending' && (
-        <div className="friend-section">
-          <span>Incoming - {incomingRequests.length}</span>
-          {incomingRequests.length === 0 && <p className="empty-copy">No incoming requests</p>}
-          {incomingRequests.map((request) => (
-            <FriendRequestRow key={request.id} request={request} onAccept={onAccept} onReject={onReject} />
-          ))}
-
-          <span>Outgoing - {outgoingRequests.length}</span>
-          {outgoingRequests.length === 0 && <p className="empty-copy">No outgoing requests</p>}
-          {outgoingRequests.map((request) => (
-            <FriendRequestRow key={request.id} request={request} />
-          ))}
-        </div>
-      )}
-
-      {(tab === 'all' || tab === 'online') && (
-        <div className="friend-section">
-          <span>{tab === 'online' ? `Online - ${friends.length}` : `All friends - ${friends.length}`}</span>
-          {friends.length === 0 && <p className="empty-copy">No friends to show</p>}
-          {friends.map((friend) => (
-            <FriendRow
-              key={friend.user.userId}
-              user={friend.user}
-              onOpenMessage={onOpenMessage}
-              onRemove={onRemove}
-            />
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function FriendRow({ user, onOpenMessage, onRemove }: {
-  user: FriendUser;
-  onOpenMessage: (userId: string) => void;
-  onRemove: (userId: string, name: string) => void;
-}) {
-  const name = user.displayName ?? user.username;
-  return (
-    <article className="friend-row">
-      <div className="small-avatar">{user.avatarUrl ? <img src={user.avatarUrl} alt="" /> : initialOf(user.username)}</div>
-      <div>
-        <strong>{name}</strong>
-        <span>{user.customStatus || user.presenceStatus.toLowerCase()}</span>
-      </div>
-      <button title="Message" type="button" onClick={() => onOpenMessage(user.userId)}>
-        <MessageCircle size={18} />
-      </button>
-      <button title="Remove friend" type="button" onClick={() => onRemove(user.userId, name)}>
-        <UserMinus size={18} />
-      </button>
-    </article>
-  );
-}
-
-function FriendRequestRow({ request, onAccept, onReject }: {
-  request: FriendRequest;
-  onAccept?: (requestId: string) => void;
-  onReject?: (requestId: string) => void;
-}) {
-  const name = request.user.displayName ?? request.user.username;
-  return (
-    <article className="friend-row">
-      <div className="small-avatar">{request.user.avatarUrl ? <img src={request.user.avatarUrl} alt="" /> : initialOf(request.user.username)}</div>
-      <div>
-        <strong>{name}</strong>
-        <span>{request.direction.toLowerCase()}</span>
-      </div>
-      {request.direction === 'INCOMING' && (
-        <>
-          <button title="Accept" type="button" onClick={() => onAccept?.(request.id)}>
-            <Check size={18} />
-          </button>
-          <button title="Reject" type="button" onClick={() => onReject?.(request.id)}>
-            <X size={18} />
-          </button>
-        </>
-      )}
-    </article>
-  );
-}
-
-function MemberGroup({title, members, offline, isOwner, currentUserId, onKick, onRoleChange}: {
-  title: string;
-  members: Member[];
-  offline?: boolean;
-  isOwner?: boolean;
-  currentUserId?: string;
-  onKick?: (userId: string, username: string) => void;
-  onRoleChange?: (userId: string, username: string, role: Member['role']) => void;
-}) {
-  return (
-      <section className="member-group">
-        <span>{title}</span>
-        {members.map((member) => (
-            <div className={`member-row ${offline ? 'offline' : ''}`} key={member.userId}>
-              <div className="small-avatar">{member.avatarUrl ? <img src={member.avatarUrl} alt="" /> : initialOf(member.username)}</div>
-              <strong>{member.displayName ?? member.username}</strong>
-
-              {member.role === 'OWNER' && <em>OWNER</em>}
-
-              {isOwner && member.userId !== currentUserId && (
-                  <select
-                      className="role-select"
-                      title="Change role"
-                      value={member.role}
-                      onChange={(event) => {
-                        const nextRole = event.target.value as Member['role'];
-                        if (nextRole !== member.role) {
-                          onRoleChange?.(member.userId, member.displayName ?? member.username, nextRole);
-                        }
-                      }}
-                  >
-                    <option value="MEMBER">MEMBER</option>
-                    <option value="OWNER">OWNER</option>
-                  </select>
-              )}
-
-              {/* Nút Kick chỉ hiện cho OWNER, không hiện ở chính bản thân mình và không được kick OWNER khác */}
-              {isOwner && member.userId !== currentUserId && member.role !== 'OWNER' && (
-                  <button
-                      className="kick-button"
-                      title="Kick Member"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onKick?.(member.userId, member.displayName ?? member.username);
-                      }}
-                  >
-                    <UserMinus size={16} />
-                  </button>
-              )}
-            </div>
-        ))}
-      </section>
-  );
-}
