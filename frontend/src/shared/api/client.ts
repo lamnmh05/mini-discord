@@ -22,7 +22,11 @@ api.interceptors.response.use(
   async (error) => {
     const original = error.config;
     const code = error.response?.data?.error?.code;
-    if ((code === 'TOKEN_EXPIRED' || error.response?.status === 401) && !original?._retry && !original?.url?.includes('/auth/refresh')) {
+    const publicAuthRequest =
+      original?.url?.includes('/auth/refresh') ||
+      original?.url?.includes('/auth/forgot-password') ||
+      original?.url?.includes('/auth/reset-password');
+    if ((code === 'TOKEN_EXPIRED' || error.response?.status === 401) && !original?._retry && !publicAuthRequest) {
       original._retry = true;
       refreshPromise ??= refreshToken().finally(() => {
         refreshPromise = undefined;

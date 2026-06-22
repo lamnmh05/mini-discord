@@ -77,6 +77,12 @@ button:disabled {
   gap: 10px;
 }
 
+.auth-title {
+  margin: 0;
+  font-size: 20px;
+  line-height: 1.2;
+}
+
 .segmented {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -135,6 +141,29 @@ input:focus {
 .form-error {
   margin: 0;
   color: #ff9a9a;
+}
+
+.form-message {
+  margin: 0;
+  color: #8fd6a3;
+}
+
+.forgot-link,
+.auth-back {
+  width: max-content;
+  min-height: 0;
+  border: 0;
+  padding: 0;
+  color: #6da8ff;
+  background: transparent;
+  font-size: 13px;
+  text-align: left;
+}
+
+.forgot-link:hover,
+.auth-back:hover {
+  color: #91bdff;
+  text-decoration: underline;
 }
 
 

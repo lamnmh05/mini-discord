@@ -19,6 +19,17 @@ spring:
     multipart:
       max-file-size: 10MB
       max-request-size: 100MB
+  mail:
+    host: ${MAIL_HOST:localhost}
+    port: ${MAIL_PORT:1025}
+    username: ${MAIL_USERNAME:}
+    password: ${MAIL_PASSWORD:}
+    properties:
+      mail:
+        smtp:
+          auth: ${MAIL_SMTP_AUTH:false}
+          starttls:
+            enable: ${MAIL_SMTP_STARTTLS_ENABLE:false}
 
 management:
   endpoints:
@@ -42,6 +53,10 @@ app:
     days: ${REFRESH_TOKEN_DAYS:30}
     secure: ${REFRESH_COOKIE_SECURE:false}
     same-site: Strict
+  password-reset:
+    minutes: ${PASSWORD_RESET_MINUTES:15}
+    frontend-base-url: ${FRONTEND_BASE_URL:http://localhost:5173}
+    mail-from: ${PASSWORD_RESET_MAIL_FROM:no-reply@mini-discord.local}
   file:
     upload-ttl-minutes: ${UPLOAD_TTL_MINUTES:60}
     bucket: ${MINIO_BUCKET:mini-discord}

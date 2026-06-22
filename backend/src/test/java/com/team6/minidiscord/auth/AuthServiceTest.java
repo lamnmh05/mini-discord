@@ -1,7 +1,9 @@
 package com.team6.minidiscord.auth;
 
 import com.team6.minidiscord.auth.dto.LoginRequest;
+import com.team6.minidiscord.auth.dto.ForgotPasswordRequest;
 import com.team6.minidiscord.auth.dto.RegisterRequest;
+import com.team6.minidiscord.auth.dto.ResetPasswordRequest;
 import com.team6.minidiscord.common.error.ApiException;
 import com.team6.minidiscord.common.error.ErrorCode;
 import com.team6.minidiscord.security.JwtService;
@@ -36,6 +38,12 @@ class AuthServiceTest {
     private RefreshTokenRepository refreshTokenRepository;
 
     @Mock
+    private PasswordResetTokenRepository passwordResetTokenRepository;
+
+    @Mock
+    private PasswordResetEmailService passwordResetEmailService;
+
+    @Mock
     private PasswordEncoder passwordEncoder;
 
     @Mock
@@ -54,10 +62,14 @@ class AuthServiceTest {
         authService = new AuthService(
                 userRepository,
                 refreshTokenRepository,
+                passwordResetTokenRepository,
+                passwordResetEmailService,
                 passwordEncoder,
                 jwtService,
                 tokenHasher,
-                30
+                30,
+                15,
+                "http://localhost:5173"
         );
     }
 
@@ -153,5 +165,71 @@ class AuthServiceTest {
                         assertThat(ex.code()).isEqualTo(ErrorCode.UNAUTHENTICATED));
 
         verify(refreshTokenRepository, never()).save(any());
+    }
+
+    @Test
+    void forgotPasswordStoresTokenHashAndSendsResetEmail() {
+        ObjectId userId = new ObjectId();
+        UserDocument user = new UserDocument();
+        user.id = userId;
+        user.email = "alice@example.com";
+        user.emailKey = "alice@example.com";
+        user.accountStatus = AccountStatus.ACTIVE;
+
+        when(userRepository.findByEmailKey("alice@example.com")).thenReturn(Optional.of(user));
+        when(tokenHasher.newRefreshToken()).thenReturn("reset-token");
+        when(tokenHasher.hash("reset-token")).thenReturn("reset-hash");
+        when(request.getRemoteAddr()).thenReturn("127.0.0.1");
+        when(passwordResetTokenRepository.save(any(PasswordResetTokenDocument.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        authService.forgotPassword(new ForgotPasswordRequest(" Alice@Example.COM "), request);
+
+        ArgumentCaptor<PasswordResetTokenDocument> captor = ArgumentCaptor.forClass(PasswordResetTokenDocument.class);
+        verify(passwordResetTokenRepository).save(captor.capture());
+        PasswordResetTokenDocument savedToken = captor.getValue();
+
+        assertThat(savedToken.userId).isEqualTo(userId);
+        assertThat(savedToken.tokenHash).isEqualTo("reset-hash");
+        assertThat(savedToken.ipAddress).isEqualTo("127.0.0.1");
+        assertThat(savedToken.expiresAt).isAfter(savedToken.createdAt);
+        verify(passwordResetEmailService).sendResetLink(
+                user,
+                "http://localhost:5173/reset-password?token=reset-token",
+                15
+        );
+    }
+
+    @Test
+    void resetPasswordUpdatesPasswordMarksTokenUsedAndRevokesRefreshTokens() {
+        ObjectId userId = new ObjectId();
+        PasswordResetTokenDocument resetToken = new PasswordResetTokenDocument();
+        resetToken.userId = userId;
+        resetToken.tokenHash = "reset-hash";
+        resetToken.expiresAt = java.time.Instant.now().plusSeconds(60);
+        resetToken.createdAt = java.time.Instant.now();
+
+        UserDocument user = new UserDocument();
+        user.id = userId;
+        user.passwordHash = "old-password";
+        user.accountStatus = AccountStatus.ACTIVE;
+
+        RefreshTokenDocument refreshToken = new RefreshTokenDocument();
+        refreshToken.userId = userId;
+
+        when(tokenHasher.hash("reset-token")).thenReturn("reset-hash");
+        when(passwordResetTokenRepository.findByTokenHash("reset-hash")).thenReturn(Optional.of(resetToken));
+        when(userRepository.findById(userId)).thenReturn(Optional.of(user));
+        when(passwordEncoder.encode("NewPassword123!")).thenReturn("new-password-hash");
+        when(refreshTokenRepository.findByUserIdAndRevokedAtIsNull(userId)).thenReturn(java.util.List.of(refreshToken));
+
+        authService.resetPassword(new ResetPasswordRequest("reset-token", "NewPassword123!"));
+
+        assertThat(user.passwordHash).isEqualTo("new-password-hash");
+        assertThat(user.updatedAt).isNotNull();
+        assertThat(resetToken.usedAt).isNotNull();
+        assertThat(refreshToken.revokedAt).isNotNull();
+        verify(userRepository).save(user);
+        verify(passwordResetTokenRepository).save(resetToken);
+        verify(refreshTokenRepository).save(refreshToken);
     }
 }

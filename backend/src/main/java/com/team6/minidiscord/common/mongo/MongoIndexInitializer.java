@@ -29,6 +29,10 @@ public class MongoIndexInitializer {
         index("refresh_tokens", new Index().on("userId", Sort.Direction.ASC).on("createdAt", Sort.Direction.DESC));
         index("refresh_tokens", new Index().on("expiresAt", Sort.Direction.ASC).expire(Duration.ZERO));
 
+        index("password_reset_tokens", new Index().on("tokenHash", Sort.Direction.ASC).unique());
+        index("password_reset_tokens", new Index().on("userId", Sort.Direction.ASC).on("createdAt", Sort.Direction.DESC));
+        index("password_reset_tokens", new Index().on("expiresAt", Sort.Direction.ASC).expire(Duration.ZERO));
+
         index("servers", new Index().on("createdById", Sort.Direction.ASC));
         index("servers", new Index().on("deletedAt", Sort.Direction.ASC));
 

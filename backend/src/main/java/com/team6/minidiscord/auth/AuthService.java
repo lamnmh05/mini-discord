@@ -1,8 +1,10 @@
 package com.team6.minidiscord.auth;
 
 import com.team6.minidiscord.auth.dto.AuthResponse;
+import com.team6.minidiscord.auth.dto.ForgotPasswordRequest;
 import com.team6.minidiscord.auth.dto.LoginRequest;
 import com.team6.minidiscord.auth.dto.RegisterRequest;
+import com.team6.minidiscord.auth.dto.ResetPasswordRequest;
 import com.team6.minidiscord.common.error.ApiException;
 import com.team6.minidiscord.common.error.ErrorCode;
 import com.team6.minidiscord.common.util.Keys;
@@ -24,25 +26,37 @@ import java.util.Optional;
 public class AuthService {
     private final UserRepository userRepository;
     private final RefreshTokenRepository refreshTokenRepository;
+    private final PasswordResetTokenRepository passwordResetTokenRepository;
+    private final PasswordResetEmailService passwordResetEmailService;
     private final PasswordEncoder passwordEncoder;
     private final JwtService jwtService;
     private final TokenHasher tokenHasher;
     private final long refreshDays;
+    private final long passwordResetMinutes;
+    private final String frontendBaseUrl;
 
     public AuthService(
             UserRepository userRepository,
             RefreshTokenRepository refreshTokenRepository,
+            PasswordResetTokenRepository passwordResetTokenRepository,
+            PasswordResetEmailService passwordResetEmailService,
             PasswordEncoder passwordEncoder,
             JwtService jwtService,
             TokenHasher tokenHasher,
-            @Value("${app.refresh-token.days}") long refreshDays
+            @Value("${app.refresh-token.days}") long refreshDays,
+            @Value("${app.password-reset.minutes}") long passwordResetMinutes,
+            @Value("${app.password-reset.frontend-base-url}") String frontendBaseUrl
     ) {
         this.userRepository = userRepository;
         this.refreshTokenRepository = refreshTokenRepository;
+        this.passwordResetTokenRepository = passwordResetTokenRepository;
+        this.passwordResetEmailService = passwordResetEmailService;
         this.passwordEncoder = passwordEncoder;
         this.jwtService = jwtService;
         this.tokenHasher = tokenHasher;
         this.refreshDays = refreshDays;
+        this.passwordResetMinutes = passwordResetMinutes;
+        this.frontendBaseUrl = frontendBaseUrl;
     }
 
     @Transactional
@@ -79,6 +93,54 @@ public class AuthService {
         }
 
         return issue(user, httpRequest, Optional.empty());
+    }
+
+    @Transactional
+    public void forgotPassword(ForgotPasswordRequest request, HttpServletRequest httpRequest) {
+        userRepository.findByEmailKey(Keys.normalize(request.email()))
+                .filter(user -> user.accountStatus == AccountStatus.ACTIVE)
+                .ifPresent(user -> {
+                    String resetToken = tokenHasher.newRefreshToken();
+                    Instant now = Instant.now();
+                    PasswordResetTokenDocument tokenDocument = new PasswordResetTokenDocument();
+                    tokenDocument.userId = user.id;
+                    tokenDocument.tokenHash = tokenHasher.hash(resetToken);
+                    tokenDocument.ipAddress = httpRequest.getRemoteAddr();
+                    tokenDocument.createdAt = now;
+                    tokenDocument.expiresAt = now.plusSeconds(passwordResetMinutes * 60);
+                    passwordResetTokenRepository.save(tokenDocument);
+
+                    String resetLink = frontendBaseUrl.replaceAll("/+$", "") + "/reset-password?token=" + resetToken;
+                    passwordResetEmailService.sendResetLink(user, resetLink, passwordResetMinutes);
+                });
+    }
+
+    @Transactional
+    public void resetPassword(ResetPasswordRequest request) {
+        PasswordResetTokenDocument resetToken = passwordResetTokenRepository.findByTokenHash(tokenHasher.hash(request.token()))
+                .orElseThrow(this::invalidResetToken);
+        Instant now = Instant.now();
+        if (resetToken.usedAt != null || resetToken.expiresAt.isBefore(now)) {
+            throw invalidResetToken();
+        }
+
+        UserDocument user = userRepository.findById(resetToken.userId)
+                .orElseThrow(this::invalidResetToken);
+        if (user.accountStatus != AccountStatus.ACTIVE) {
+            throw invalidResetToken();
+        }
+
+        user.passwordHash = passwordEncoder.encode(request.newPassword());
+        user.updatedAt = now;
+        userRepository.save(user);
+
+        resetToken.usedAt = now;
+        passwordResetTokenRepository.save(resetToken);
+
+        refreshTokenRepository.findByUserIdAndRevokedAtIsNull(user.id).forEach(token -> {
+            token.revokedAt = now;
+            refreshTokenRepository.save(token);
+        });
     }
 
     @Transactional
@@ -129,6 +191,10 @@ public class AuthService {
 
     private ApiException loginFailed() {
         return new ApiException(ErrorCode.UNAUTHENTICATED, "Email hoặc password không đúng.");
+    }
+
+    private ApiException invalidResetToken() {
+        return new ApiException(ErrorCode.VALIDATION_ERROR, "Token đặt lại mật khẩu không hợp lệ hoặc đã hết hạn.");
     }
 
     public record IssuedAuth(AuthResponse response, String refreshToken, RefreshTokenDocument refreshTokenDocument) {

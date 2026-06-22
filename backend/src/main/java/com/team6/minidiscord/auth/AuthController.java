@@ -1,8 +1,10 @@
 package com.team6.minidiscord.auth;
 
 import com.team6.minidiscord.auth.dto.AuthResponse;
+import com.team6.minidiscord.auth.dto.ForgotPasswordRequest;
 import com.team6.minidiscord.auth.dto.LoginRequest;
 import com.team6.minidiscord.auth.dto.RegisterRequest;
+import com.team6.minidiscord.auth.dto.ResetPasswordRequest;
 import com.team6.minidiscord.common.api.ApiResponse;
 import com.team6.minidiscord.common.error.ApiException;
 import com.team6.minidiscord.common.error.ErrorCode;
@@ -42,6 +44,21 @@ public class AuthController {
         AuthService.IssuedAuth issued = authService.login(request, httpRequest);
         cookieService.setRefreshToken(httpResponse, issued.refreshToken());
         return ApiResponse.ok(issued.response());
+    }
+
+    @PostMapping("/forgot-password")
+    public ApiResponse<Map<String, String>> forgotPassword(
+            @Valid @RequestBody ForgotPasswordRequest request,
+            HttpServletRequest httpRequest
+    ) {
+        authService.forgotPassword(request, httpRequest);
+        return ApiResponse.ok(Map.of("message", "Nếu email tồn tại, hướng dẫn đặt lại mật khẩu đã được gửi."));
+    }
+
+    @PostMapping("/reset-password")
+    public ApiResponse<Map<String, String>> resetPassword(@Valid @RequestBody ResetPasswordRequest request) {
+        authService.resetPassword(request);
+        return ApiResponse.ok(Map.of("message", "Đổi mật khẩu thành công."));
     }
 
     @PostMapping("/logout")

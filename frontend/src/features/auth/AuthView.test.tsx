@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useAuthStore } from '../../store/authStore';
@@ -31,6 +31,7 @@ describe('AuthView', () => {
   });
 
   afterEach(() => {
+    cleanup();
     useAuthStore.getState().clear();
   });
 
@@ -75,5 +76,28 @@ describe('AuthView', () => {
       password: 'Password123!'
     });
     expect(useAuthStore.getState().user).toEqual(user);
+  });
+
+  it('opens forgot password form from the small link under password', async () => {
+    apiMocks.post.mockResolvedValue({
+      data: {
+        success: true,
+        data: { message: 'If the email exists, reset instructions were sent.' },
+        meta: {}
+      }
+    });
+
+    render(<AuthView />);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Forgot password?' }));
+    await userEvent.type(screen.getByLabelText('Email'), 'alice@example.com');
+    await userEvent.click(screen.getByRole('button', { name: 'Send reset link' }));
+
+    await waitFor(() => {
+      expect(apiMocks.post).toHaveBeenCalledWith('/auth/forgot-password', {
+        email: 'alice@example.com'
+      });
+    });
+    expect(screen.getByText('If the email exists, reset instructions were sent.')).toBeTruthy();
   });
 });
