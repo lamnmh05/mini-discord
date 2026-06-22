@@ -52,7 +52,7 @@ public class AuthController {
             HttpServletRequest httpRequest
     ) {
         authService.forgotPassword(request, httpRequest);
-        return ApiResponse.ok(Map.of("message", "Nếu email tồn tại, hướng dẫn đặt lại mật khẩu đã được gửi."));
+        return ApiResponse.ok(Map.of("message", "Hướng dẫn đặt lại mật khẩu đã được gửi tới email của bạn."));
     }
 
     @PostMapping("/reset-password")
